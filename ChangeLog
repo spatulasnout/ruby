@@ -5,6 +5,13 @@ Tue Jan 28 03:59:15 2014  NARUSE, Yui  <naruse@ruby-lang.org>
 	  By this, FreeBSD's clang can build ruby 1.8,
 	  and alloca(1) doesn't work on it.
 
+Mon Jan 26 05:36:55 2009  Technorama Ltd.  <oss-ruby@technorama.net>
+
+	* ext/openssl/ossl_ssl.c: Server Name Indication support.
+	  new methods SSLContext#server_name_cb=, SSLSocket#hostname=.
+
+	* test/openssl/test_ssl.rb: Tests for above.
+
 Fri Nov 22 12:43:52 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 
 	* util.c (ruby_strtod): ignore too long fraction part, which does not
