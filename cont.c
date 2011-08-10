@@ -15,6 +15,8 @@
 #include "gc.h"
 #include "eval_intern.h"
 
+#define FIBER_STACK_SIZE_SCALE  8  /* %%BWK 110220 - need more fiber stack space */
+
 #if ((defined(_WIN32) && _WIN32_WINNT >= 0x0400) || defined(HAVE_SETCONTEXT)) && !defined(__NetBSD__) && !defined(sun) && !defined(FIBER_USE_NATIVE)
 #define FIBER_USE_NATIVE 1
 
@@ -47,7 +49,7 @@
 #define RB_PAGE_SIZE (pagesize)
 #define RB_PAGE_MASK (~(RB_PAGE_SIZE - 1))
 static long pagesize;
-#define FIBER_MACHINE_STACK_ALLOCATION_SIZE  (0x10000)
+#define FIBER_MACHINE_STACK_ALLOCATION_SIZE  (0x10000 * FIBER_STACK_SIZE_SCALE)
 #endif
 
 #define CAPTURE_JUST_VALID_VM_STACK 1
@@ -976,7 +978,7 @@ rb_cont_call(int argc, VALUE *argv, VALUE contval)
  *
  */
 
-#define FIBER_VM_STACK_SIZE (4 * 1024)
+#define FIBER_VM_STACK_SIZE ((4 * 1024) * FIBER_STACK_SIZE_SCALE)
 
 static const rb_data_type_t fiber_data_type = {
     "fiber",
