@@ -48,6 +48,13 @@
 
 #include "ruby/util.h"
 
+#if defined(RUBY_INSTALL_PREFIX_ENV)
+#if (defined(LOAD_RELATIVE) || defined(MANGLED_PATH))
+#error RUBY_INSTALL_PREFIX_ENV incompatible with LOAD_RELATIVE or MANGLED_PATH
+#endif
+extern VALUE rb_str_plus (VALUE str1, VALUE str2);
+#endif
+
 #ifndef HAVE_STDLIB_H
 char *getenv();
 #endif
@@ -435,7 +442,11 @@ ruby_init_loadpath_safe(int safe_level)
 #define RUBY_RELATIVE(path, len) rb_str_buf_cat(BASEPATH(), (path), (len))
 #else
     static const char exec_prefix[] = RUBY_EXEC_PREFIX;
-#define RUBY_RELATIVE(path, len) rubylib_mangled_path((path), (len))
+    # if defined(RUBY_INSTALL_PREFIX_ENV)
+#  define RUBY_RELATIVE(path, len) rb_str_plus(cwdofst_abs, rb_str_new(path, len))
+# else
+#  define RUBY_RELATIVE(path, len) rubylib_mangled_path((path), (len))
+# endif
 #define PREFIX_PATH() RUBY_RELATIVE(exec_prefix, sizeof(exec_prefix)-1)
 #endif
     load_path = GET_VM()->load_path;
@@ -447,6 +458,13 @@ ruby_init_loadpath_safe(int safe_level)
 	ruby_push_include(getenv("RUBYLIB"), identical_path);
     }
 
+#if defined(RUBY_INSTALL_PREFIX_ENV)
+    {
+    const char *pfx = getenv("RUBY_INSTALL_PREFIX");
+    VALUE cwdofst = rb_str_new_cstr( ((pfx && strlen(pfx) > 0) ? pfx : ".") );
+    VALUE cwdofst_abs = rb_file_absolute_path(cwdofst, Qnil);
+    #endif
+
     id_initial_load_path_mark = rb_intern_const("@gem_prelude_index");
     while (*paths) {
 	size_t len = strlen(paths);
@@ -457,6 +475,12 @@ ruby_init_loadpath_safe(int safe_level)
     }
 
     rb_const_set(rb_cObject, rb_intern_const("TMP_RUBY_PREFIX"), rb_obj_freeze(PREFIX_PATH()));
+
+#if defined(RUBY_INSTALL_PREFIX_ENV)
+    rb_str_resize(cwdofst, 0);
+    rb_str_resize(cwdofst_abs, 0);
+    }
+#endif
 }
 
 
