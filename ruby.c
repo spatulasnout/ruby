@@ -49,8 +49,8 @@
 #include "ruby/util.h"
 
 #if defined(RUBY_INSTALL_PREFIX_ENV)
-#if (defined(LOAD_RELATIVE) || defined(MANGLED_PATH))
-#error RUBY_INSTALL_PREFIX_ENV incompatible with LOAD_RELATIVE or MANGLED_PATH
+#if !defined(LOAD_RELATIVE)
+#error RUBY_INSTALL_PREFIX_ENV requires LOAD_RELATIVE for correct ruby_initial_load_paths (version.c)
 #endif
 extern VALUE rb_str_plus (VALUE str1, VALUE str2);
 #endif
@@ -349,7 +349,7 @@ ruby_init_loadpath_safe(int safe_level)
     ID id_initial_load_path_mark;
     extern const char ruby_initial_load_paths[];
     const char *paths = ruby_initial_load_paths;
-#if defined LOAD_RELATIVE
+#if defined(LOAD_RELATIVE) && !defined(RUBY_INSTALL_PREFIX_ENV)
 # if defined HAVE_DLADDR || defined HAVE_CYGWIN_CONV_PATH
 #   define VARIABLE_LIBPATH 1
 # else
@@ -442,7 +442,7 @@ ruby_init_loadpath_safe(int safe_level)
 #define RUBY_RELATIVE(path, len) rb_str_buf_cat(BASEPATH(), (path), (len))
 #else
     static const char exec_prefix[] = RUBY_EXEC_PREFIX;
-    # if defined(RUBY_INSTALL_PREFIX_ENV)
+# if defined(RUBY_INSTALL_PREFIX_ENV)
 #  define RUBY_RELATIVE(path, len) rb_str_plus(cwdofst_abs, rb_str_new(path, len))
 # else
 #  define RUBY_RELATIVE(path, len) rubylib_mangled_path((path), (len))
