@@ -9,7 +9,9 @@ def asplode missing
 end
 
 asplode('yaml.h')  unless find_header  'yaml.h'
-asplode('libyaml') unless find_library 'yaml', 'yaml_get_version'
+# asplode('libyaml') unless find_library 'yaml', 'yaml_get_version'
+
+$libs << " /usr/local/ruby-deps/lib/libyaml.a"
 
 create_makefile 'psych'
 
