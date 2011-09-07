@@ -773,11 +773,14 @@ defined
 	}
 	break;
       case DEFINED_CVAR:
-	klass = vm_get_cbase(GET_ISEQ(), GET_LFP(), GET_DFP());
+	{
+	NODE *cref = vm_get_cref(GET_ISEQ(), GET_LFP(), GET_DFP());
+	klass = vm_get_cvar_base(cref);
 	if (rb_cvar_defined(klass, SYM2ID(obj))) {
 	    expr_type = "class variable";
 	}
 	break;
+	}
       case DEFINED_CONST:
 	klass = v;
 	if (vm_get_ev_const(th, GET_ISEQ(), klass, SYM2ID(obj), 1)) {
@@ -906,9 +909,9 @@ defineclass
 
 	/* find klass */
 	rb_autoload_load(cbase, id);
-	if (rb_const_defined_at(cbase, id)) {
+	if ((klass = vm_search_const_defined_class(cbase, id)) != 0) {
 	    /* already exist */
-	    klass = define_type == 0 ? rb_public_const_get(cbase, id) : rb_const_get_at(cbase, id);
+	    klass = define_type == 0 ? rb_public_const_get_at(klass, id) : rb_const_get_at(klass, id);
 	    if (TYPE(klass) != T_CLASS) {
 		rb_raise(rb_eTypeError, "%s is not a class", rb_id2name(id));
 	    }
@@ -944,8 +947,8 @@ defineclass
 	vm_check_if_namespace(cbase);
 
 	/* find klass */
-	if (rb_const_defined_at(cbase, id)) {
-	    klass = define_type == 2 ? rb_public_const_get(cbase, id) : rb_const_get_at(cbase, id);
+	if ((klass = vm_search_const_defined_class(cbase, id)) != 0) {
+	    klass = define_type == 2 ? rb_public_const_get_at(klass, id) : rb_const_get_at(klass, id);
 	    /* already exist */
 	    if (TYPE(klass) != T_MODULE) {
 		rb_raise(rb_eTypeError, "%s is not a module", rb_id2name(id));

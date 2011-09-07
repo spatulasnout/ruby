@@ -113,7 +113,7 @@ then
 fi
 AS_CASE(["$build_os"],
   [darwin11.*], [
-    test -z "$withval" && : ${CC=gcc-4.2}
+    : ${CC:=gcc-4.2}
     AS_CASE(["x$CC"],
       [xgcc-4.2|x/usr/bin/gcc-4.2], [: ${CXX=g++-4.2}],
       [xgcc|x/usr/bin/gcc],         [: ${CXX=g++}],
@@ -945,6 +945,11 @@ AS_CASE(["$target_os"],
 		AC_DEFINE(SIZEOF_STRUCT_DIRENT_TOO_SMALL, 1)
 		LIBS="-lm $LIBS"
 		],
+# GNU Hurd
+[gnu*], [
+		AC_DEFINE(SIZEOF_STRUCT_DIRENT_TOO_SMALL, 1)
+		LIBS="-lm $LIBS"
+		],
 [nextstep*], [	],
 [openstep*], [	],
 [rhapsody*], [	],
@@ -1154,7 +1159,7 @@ AC_CHECK_HEADERS(limits.h sys/file.h sys/ioctl.h sys/syscall.h\
 		 syscall.h pwd.h grp.h a.out.h utime.h direct.h sys/resource.h \
 		 sys/mkdev.h sys/utime.h xti.h netinet/in_systm.h float.h ieeefp.h \
 		 ucontext.h intrinsics.h langinfo.h locale.h sys/sendfile.h time.h \
-		 net/socket.h sys/socket.h)
+		 net/socket.h sys/socket.h process.h)
 
 AC_TYPE_SIZE_T
 RUBY_CHECK_SIZEOF(size_t, [int long void*], [], [@%:@include <sys/types.h>])
@@ -2027,6 +2032,9 @@ if test "$with_dln_a_out" != yes; then
 			    fi
 			else
 			    : ${LDSHARED='$(CC) -G'}
+			fi
+			if test "$ac_cv_sizeof_voidp" = 8; then
+			    : ${LIBPATHENV=LD_LIBRARY_PATH_64}
 			fi
 			rb_cv_dlopen=yes],
 	[sunos*], [	: ${LDSHARED='ld -assert nodefinitions'}
