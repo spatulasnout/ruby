@@ -415,6 +415,8 @@ vm_make_env_each(rb_thread_t * const th, rb_control_frame_t * const cfp,
     if (!RUBY_VM_NORMAL_ISEQ_P(cfp->iseq)) {
 	/* TODO */
 	env->block.iseq = 0;
+    } else {
+	rb_vm_rewrite_dfp_in_errinfo(th, cfp);
     }
     return envval;
 }
@@ -475,6 +477,28 @@ rb_vm_make_env_object(rb_thread_t * th, rb_control_frame_t *cfp)
     }
 
     return envval;
+}
+
+void
+rb_vm_rewrite_dfp_in_errinfo(rb_thread_t *th, rb_control_frame_t *cfp)
+{
+    /* rewrite dfp in errinfo to point to heap */
+    if (RUBY_VM_NORMAL_ISEQ_P(cfp->iseq) &&
+	(cfp->iseq->type == ISEQ_TYPE_RESCUE ||
+	 cfp->iseq->type == ISEQ_TYPE_ENSURE)) {
+	VALUE errinfo = cfp->dfp[-2]; /* #$! */
+	if (RB_TYPE_P(errinfo, T_NODE)) {
+	    VALUE *escape_dfp = GET_THROWOBJ_CATCH_POINT(errinfo);
+	    if (! ENV_IN_HEAP_P(th, escape_dfp)) {
+		VALUE dfpval = *escape_dfp;
+		if (CLASS_OF(dfpval) == rb_cEnv) {
+		    rb_env_t *dfpenv;
+		    GetEnvPtr(dfpval, dfpenv);
+		    SET_THROWOBJ_CATCH_POINT(errinfo, (VALUE)(dfpenv->env + dfpenv->local_size));
+		}
+	    }
+	}
+    }
 }
 
 void
@@ -1761,7 +1785,7 @@ thread_free(void *ptr)
 	else {
 #ifdef USE_SIGALTSTACK
 	    if (th->altstack) {
-		xfree(th->altstack);
+		free(th->altstack);
 	    }
 #endif
 	    ruby_xfree(ptr);
@@ -1792,8 +1816,8 @@ thread_memsize(const void *ptr)
     }
 }
 
-#define thread_data_type ruby_thread_data_type
-const rb_data_type_t ruby_thread_data_type = {
+#define thread_data_type ruby_threadptr_data_type
+const rb_data_type_t ruby_threadptr_data_type = {
     "VM/thread",
     {
 	rb_thread_mark,
@@ -1834,7 +1858,8 @@ th_init(rb_thread_t *th, VALUE self)
 
     /* allocate thread stack */
 #ifdef USE_SIGALTSTACK
-    th->altstack = xmalloc(ALT_STACK_SIZE);
+    /* altstack of main thread is reallocated in another place */
+    th->altstack = malloc(ALT_STACK_SIZE);
 #endif
     th->stack_size = RUBY_VM_THREAD_STACK_SIZE;
     th->stack = thread_recycle_stack(th->stack_size);

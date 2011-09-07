@@ -1491,18 +1491,40 @@ flo_round(int argc, VALUE *argv, VALUE num)
     VALUE nd;
     double number, f;
     int ndigits = 0;
+    int binexp;
     long val;
 
     if (argc > 0 && rb_scan_args(argc, argv, "01", &nd) == 1) {
 	ndigits = NUM2INT(nd);
     }
     number  = RFLOAT_VALUE(num);
-    f = pow(10, abs(ndigits));
+    frexp (number , &binexp);
 
-    if (isinf(f)) {
-	if (ndigits < 0) number = 0;
+/* Let `exp` be such that `number` is written as:"0.#{digits}e#{exp}",
+   i.e. such that  10 ** (exp - 1) <= |number| < 10 ** exp
+   Recall that up to 17 digits can be needed to represent a double,
+   so if ndigits + exp >= 17, the intermediate value (number * 10 ** ndigits)
+   will be an integer and thus the result is the original number.
+   If ndigits + exp <= 0, the result is 0 or "1e#{exp}", so
+   if ndigits + exp < 0, the result is 0.
+   We have:
+	2 ** (binexp-1) <= |number| < 2 ** binexp
+	10 ** ((binexp-1)/log_2(10)) <= |number| < 10 ** (binexp/log_2(10))
+	If binexp >= 0, and since log_2(10) = 3.322259:
+	   10 ** (binexp/4 - 1) < |number| < 10 ** (binexp/3)
+	   binexp/4 <= exp <= binexp/3
+	If binexp <= 0, swap the /4 and the /3
+	So if ndigits + binexp/(4 or 3) >= 17, the result is number
+	If ndigits + binexp/(3 or 4) < 0 the result is 0
+*/
+    if (isinf(number) || isnan(number)) {
+	/* Do nothing */
     }
-    else {
+    else if ((long)ndigits * (4 - (binexp > 0)) + binexp < 0) {
+	number = 0;
+    }
+    else if (((long)ndigits - 17) * (3 + (binexp > 0)) + binexp < 0) {
+	f = pow(10, abs(ndigits));
 	if (ndigits < 0) {
 	    double absnum = fabs(number);
 	    if (absnum < f) return INT2FIX(0);
@@ -1602,7 +1624,7 @@ num_ceil(VALUE num)
  *     num.round([ndigits])  ->  integer or float
  *
  *  Rounds <i>num</i> to a given precision in decimal digits (default 0 digits).
- *  Precision may be negative.  Returns a floating point number when ndigits
+ *  Precision may be negative.  Returns a floating point number when <i>ndigits</i>
  *  is more than zero.  <code>Numeric</code> implements this by converting itself
  *  to a <code>Float</code> and invoking <code>Float#round</code>.
  */
@@ -2031,7 +2053,6 @@ rb_num2ull(VALUE val)
  *     int.to_int    ->  integer
  *     int.floor     ->  integer
  *     int.ceil      ->  integer
- *     int.round     ->  integer
  *     int.truncate  ->  integer
  *
  *  As <i>int</i> is already an <code>Integer</code>, all these
@@ -3283,7 +3304,7 @@ int_dotimes(VALUE num)
 
 /*
  *  call-seq:
- *     num.round([ndigits])  ->  integer or float
+ *     int.round([ndigits])  ->  integer or float
  *
  *  Rounds <i>flt</i> to a given precision in decimal digits (default 0 digits).
  *  Precision may be negative.  Returns a floating point number when +ndigits+
@@ -3299,6 +3320,7 @@ int_round(int argc, VALUE* argv, VALUE num)
 {
     VALUE n, f, h, r;
     int ndigits;
+    ID op;
 
     if (argc == 0) return num;
     rb_scan_args(argc, argv, "1", &n);
@@ -3325,7 +3347,8 @@ int_round(int argc, VALUE* argv, VALUE num)
     h = rb_funcall(f, '/', 1, INT2FIX(2));
     r = rb_funcall(num, '%', 1, f);
     n = rb_funcall(num, '-', 1, r);
-    if (!RTEST(rb_funcall(r, '<', 1, h))) {
+    op = RTEST(rb_funcall(num, '<', 1, INT2FIX(0))) ? rb_intern("<=") : '<';
+    if (!RTEST(rb_funcall(r, op, 1, h))) {
 	n = rb_funcall(n, '+', 1, f);
     }
     return n;
