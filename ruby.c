@@ -461,7 +461,7 @@ ruby_init_loadpath_safe(int safe_level)
 #if defined(RUBY_INSTALL_PREFIX_ENV)
     {
     const char *pfx = getenv("RUBY_INSTALL_PREFIX");
-    VALUE cwdofst = rb_str_new_cstr( ((pfx && strlen(pfx) > 0) ? pfx : ".") );
+    VALUE cwdofst = rb_str_new_cstr( ((pfx && strlen(pfx) > 0) ? pfx : #RUBY_INSTALL_PREFIX_ENV ) );
     VALUE cwdofst_abs = rb_file_absolute_path(cwdofst, Qnil);
     #endif
 
