@@ -9093,6 +9093,7 @@ new_args_gen(struct parser_params *parser, NODE *m, NODE *o, ID r, NODE *p, ID b
 static void
 warn_unused_var(struct parser_params *parser, struct local_vars *local)
 {
+#ifdef WARN_ENABLE_ASSIGNED_BUT_UNUSED
     int i, cnt;
     ID *v, *u;
 
@@ -9108,6 +9109,7 @@ warn_unused_var(struct parser_params *parser, struct local_vars *local)
 	if (idUScore == v[i]) continue;
 	rb_compile_warn(ruby_sourcefile, (int)u[i], "assigned but unused variable - %s", rb_id2name(v[i]));
     }
+#endif
 }
 
 static void
