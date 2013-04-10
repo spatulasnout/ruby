@@ -824,7 +824,7 @@ w_object(VALUE obj, struct dump_arg *arg, int limit)
 
 		if (!rb_respond_to(obj, s_dump_data)) {
 		    rb_raise(rb_eTypeError,
-			     "no marshal_dump is defined for class %s",
+			     "no _dump_data is defined for class %s",
 			     rb_obj_classname(obj));
 		}
 		v = rb_funcall(obj, s_dump_data, 0);
@@ -1214,7 +1214,8 @@ r_entry0(VALUE v, st_index_t num, struct load_arg *arg)
     else {
         st_insert(arg->data, num, (st_data_t)v);
     }
-    if (arg->infection) {
+    if (arg->infection &&
+	TYPE(v) != T_CLASS && TYPE(v) != T_MODULE) {
 	FL_SET(v, arg->infection);
 	if ((VALUE)real_obj != Qundef)
 	    FL_SET((VALUE)real_obj, arg->infection);

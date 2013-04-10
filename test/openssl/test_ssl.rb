@@ -9,6 +9,15 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
     assert_equal(ctx.setup, nil)
   end
 
+  def test_ctx_setup_no_compression
+    ctx = OpenSSL::SSL::SSLContext.new
+    ctx.options = OpenSSL::SSL::OP_ALL | OpenSSL::SSL::OP_NO_COMPRESSION
+    assert_equal(ctx.setup, true)
+    assert_equal(ctx.setup, nil)
+    assert_equal(OpenSSL::SSL::OP_NO_COMPRESSION,
+                 ctx.options & OpenSSL::SSL::OP_NO_COMPRESSION)
+  end if defined?(OpenSSL::SSL::OP_NO_COMPRESSION)
+
   def test_not_started_session
     skip "non socket argument of SSLSocket.new is not supported on this platform" if /mswin|mingw/ =~ RUBY_PLATFORM
     open(__FILE__) do |f|
@@ -385,6 +394,50 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
       end
     end
   end
+
+  def test_multibyte_read_write
+    #German a umlaut
+    auml = [%w{ C3 A4 }.join('')].pack('H*')
+    auml.force_encoding(Encoding::UTF_8)
+
+    [10, 1000, 100000].each {|i|
+      str = nil
+      num_written = nil
+      server_proc = Proc.new {|ctx, ssl|
+        cmp = ssl.read
+        raw_size = cmp.size
+        cmp.force_encoding(Encoding::UTF_8)
+        assert_equal(str, cmp)
+        assert_equal(num_written, raw_size)
+        ssl.close
+      }
+      start_server(PORT, OpenSSL::SSL::VERIFY_NONE, true, :server_proc => server_proc){|server, port|
+        sock = TCPSocket.new("127.0.0.1", port)
+        ssl = OpenSSL::SSL::SSLSocket.new(sock)
+        ssl.sync_close = true
+        ssl.connect
+        str = auml * i
+        num_written = ssl.write(str)
+        ssl.close
+      }
+    }
+  end
+
+  def test_unset_OP_ALL
+    ctx_proc = Proc.new { |ctx|
+      ctx.options = OpenSSL::SSL::OP_ALL & ~OpenSSL::SSL::OP_DONT_INSERT_EMPTY_FRAGMENTS
+    }
+    start_server(PORT, OpenSSL::SSL::VERIFY_NONE, true, :ctx_proc => ctx_proc){|server, port|
+      sock = TCPSocket.new("127.0.0.1", port)
+      ssl = OpenSSL::SSL::SSLSocket.new(sock)
+      ssl.sync_close = true
+      ssl.connect
+      ssl.puts('hello')
+      assert_equal("hello\n", ssl.gets)
+      ssl.close
+    }
+  end
+
 end
 
 end

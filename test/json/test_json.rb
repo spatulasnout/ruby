@@ -4,6 +4,7 @@
 require 'test/unit'
 require File.join(File.dirname(__FILE__), 'setup_variant')
 require 'stringio'
+require 'tempfile'
 
 unless Array.method_defined?(:permutation)
   begin
@@ -102,6 +103,42 @@ class TC_JSON < Test::Unit::TestCase
     assert_equal({ "a" => 23 }, parse('  { "a"  : 23  } '))
     assert_equal({ "a" => 0.23 }, parse(' { "a"  :  0.23 }  '))
     assert_equal({ "a" => 0.23 }, parse('  {  "a"  :  0.23  }  '))
+  end
+
+  def test_parse_json_primitive_values
+    assert_raise(JSON::ParserError) { JSON.parse('') }
+    assert_raise(JSON::ParserError) { JSON.parse('', :quirks_mode => true) }
+    assert_raise(JSON::ParserError) { JSON.parse('  /* foo */ ') }
+    assert_raise(JSON::ParserError) { JSON.parse('  /* foo */ ', :quirks_mode => true) }
+    parser = JSON::Parser.new('null')
+    assert_equal false, parser.quirks_mode?
+    assert_raise(JSON::ParserError) { parser.parse }
+    assert_raise(JSON::ParserError) { JSON.parse('null') }
+    assert_equal nil, JSON.parse('null', :quirks_mode => true)
+    parser = JSON::Parser.new('null', :quirks_mode => true)
+    assert_equal true, parser.quirks_mode?
+    assert_equal nil, parser.parse
+    assert_raise(JSON::ParserError) { JSON.parse('false') }
+    assert_equal false, JSON.parse('false', :quirks_mode => true)
+    assert_raise(JSON::ParserError) { JSON.parse('true') }
+    assert_equal true, JSON.parse('true', :quirks_mode => true)
+    assert_raise(JSON::ParserError) { JSON.parse('23') }
+    assert_equal 23, JSON.parse('23', :quirks_mode => true)
+    assert_raise(JSON::ParserError) { JSON.parse('1') }
+    assert_equal 1, JSON.parse('1', :quirks_mode => true)
+    assert_raise(JSON::ParserError) { JSON.parse('3.141') }
+    assert_in_delta 3.141, JSON.parse('3.141', :quirks_mode => true), 1E-3
+    assert_raise(JSON::ParserError) { JSON.parse('18446744073709551616') }
+    assert_equal 2 ** 64, JSON.parse('18446744073709551616', :quirks_mode => true)
+    assert_raise(JSON::ParserError) { JSON.parse('"foo"') }
+    assert_equal 'foo', JSON.parse('"foo"', :quirks_mode => true)
+    assert_raise(JSON::ParserError) { JSON.parse('NaN', :allow_nan => true) }
+    assert JSON.parse('NaN', :quirks_mode => true, :allow_nan => true).nan?
+    assert_raise(JSON::ParserError) { JSON.parse('Infinity', :allow_nan => true) }
+    assert JSON.parse('Infinity', :quirks_mode => true, :allow_nan => true).infinite?
+    assert_raise(JSON::ParserError) { JSON.parse('-Infinity', :allow_nan => true) }
+    assert JSON.parse('-Infinity', :quirks_mode => true, :allow_nan => true).infinite?
+    assert_raise(JSON::ParserError) { JSON.parse('[ 1, ]', :quirks_mode => true) }
   end
 
   if Array.method_defined?(:permutation)
@@ -227,12 +264,12 @@ class TC_JSON < Test::Unit::TestCase
   def test_generation_of_core_subclasses_with_new_to_json
     obj = SubHash2["foo" => SubHash2["bar" => true]]
     obj_json = JSON(obj)
-    obj_again = JSON(obj_json)
+    obj_again = JSON.parse(obj_json, :create_additions => true)
     assert_kind_of SubHash2, obj_again
     assert_kind_of SubHash2, obj_again['foo']
     assert obj_again['foo']['bar']
     assert_equal obj, obj_again
-    assert_equal ["foo"], JSON(JSON(SubArray2["foo"]))
+    assert_equal ["foo"], JSON(JSON(SubArray2["foo"]), :create_additions => true)
   end
 
   def test_generation_of_core_subclasses_with_default_to_json
@@ -376,6 +413,25 @@ EOT
       JSON.parse('{"foo":"bar", "baz":"quux"}'))
     assert_equal({ :foo => "bar", :baz => "quux" },
       JSON.parse('{"foo":"bar", "baz":"quux"}', :symbolize_names => true))
+  end
+
+  def test_load
+    assert_equal @hash, JSON.load(@json)
+    tempfile = Tempfile.open('json')
+    tempfile.write @json
+    tempfile.rewind
+    assert_equal @hash, JSON.load(tempfile)
+    stringio = StringIO.new(@json)
+    stringio.rewind
+    assert_equal @hash, JSON.load(stringio)
+    assert_raise(NoMethodError) { JSON.load(nil) }
+    assert_raise(JSON::ParserError) {JSON.load('') }
+  end
+
+  def test_load_with_options
+    small_hash  = JSON("foo" => 'bar')
+    symbol_hash = { :foo => 'bar' }
+    assert_equal symbol_hash, JSON.load(small_hash, nil, :symbolize_names => true)
   end
 
   def test_load_dump

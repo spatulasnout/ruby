@@ -195,6 +195,29 @@ if defined? Zlib
       z << "foo" # ???
     end
 
+    def test_inflate_dictionary
+      dictionary = "foo"
+
+      deflate = Zlib::Deflate.new
+      deflate.set_dictionary dictionary
+      compressed = deflate.deflate "foofoofoo", Zlib::FINISH
+      deflate.close
+
+      out = nil
+      inflate = Zlib::Inflate.new
+
+      begin
+        out = inflate.inflate compressed
+
+        flunk "Zlib::NeedDict was not raised"
+      rescue Zlib::NeedDict
+        inflate.set_dictionary dictionary
+        out = inflate.inflate ""
+      end
+
+      assert_equal "foofoofoo", out
+    end
+
     def test_sync
       z = Zlib::Deflate.new
       s = z.deflate("foo" * 1000, Zlib::FULL_FLUSH)
@@ -693,6 +716,20 @@ if defined? Zlib
       f = open(t.path)
       assert_equal("foo", Zlib::GzipReader.wrap(f) {|gz| gz.read })
       assert_raise(IOError) { f.close }
+    end
+
+    def test_corrupted_header
+      gz = Zlib::GzipWriter.new(StringIO.new(s = ""))
+      gz.orig_name = "X"
+      gz.comment = "Y"
+      gz.print("foo")
+      gz.finish
+      # 14: magic(2) + method(1) + flag(1) + mtime(4) + exflag(1) + os(1) + orig_name(2) + comment(2)
+      1.upto(14) do |idx|
+        assert_raise(Zlib::GzipFile::Error, idx) do
+          Zlib::GzipReader.new(StringIO.new(s[0, idx])).read
+        end
+      end
     end
   end
 

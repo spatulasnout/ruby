@@ -114,22 +114,10 @@ module REXML
 
       def initialize( source )
         self.stream = source
+        @listeners = []
       end
 
       def add_listener( listener )
-        if !defined?(@listeners) or !@listeners
-          @listeners = []
-          instance_eval <<-EOL
-            alias :_old_pull :pull
-            def pull
-              event = _old_pull
-              @listeners.each do |listener|
-                listener.receive event
-              end
-              event
-            end
-          EOL
-        end
         @listeners << listener
       end
 
@@ -192,6 +180,14 @@ module REXML
 
       # Returns the next event.  This is a +PullEvent+ object.
       def pull
+        pull_event.tap do |event|
+          @listeners.each do |listener|
+            listener.receive event
+          end
+        end
+      end
+
+      def pull_event
         if @closed
           x, @closed = @closed, nil
           return [ :end_element, x ]
@@ -346,7 +342,7 @@ module REXML
                 md = @source.match( COMMENT_PATTERN, true )
 
                 case md[1]
-                when /--/, /-$/
+                when /--/, /-\z/
                   raise REXML::ParseException.new("Malformed comment", @source)
                 end
 
@@ -380,7 +376,7 @@ module REXML
                 attrs.each { |a,b,c,d,e|
                   if b == "xmlns"
                     if c == "xml"
-                      if d != "http://www.w3.org/XML/1998/namespace"
+                      if e != "http://www.w3.org/XML/1998/namespace"
                         msg = "The 'xml' prefix must not be bound to any other namespace "+
                         "(http://www.w3.org/TR/REC-xml-names/#ns-decl)"
                         raise REXML::ParseException.new( msg, @source, self )
@@ -440,6 +436,7 @@ module REXML
         end
         return [ :dummy ]
       end
+      private :pull_event
 
       def entity( reference, entities )
         value = nil

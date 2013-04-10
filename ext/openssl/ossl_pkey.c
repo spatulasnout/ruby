@@ -101,7 +101,6 @@ ossl_pkey_new_from_file(VALUE filename)
 static VALUE
 ossl_pkey_new_from_data(int argc, VALUE *argv, VALUE self)
 {
-     FILE *fp;
      EVP_PKEY *pkey;
      BIO *bio;
      VALUE data, pass;
@@ -370,11 +369,11 @@ Init_ossl_pkey()
     /* Document-class: OpenSSL::PKey::PKey
      *
      * An abstract class that bundles signature creation (PKey#sign) and
-     * validation (PKey#verify) that is common to all implementations:
+     * validation (PKey#verify) that is common to all implementations except
+     * OpenSSL::PKey::DH
      * * OpenSSL::PKey::RSA
      * * OpenSSL::PKey::DSA
      * * OpenSSL::PKey::EC
-     * * OpenSSL::PKey::DH
      */
     cPKey = rb_define_class_under(mPKey, "PKey", rb_cObject);
 

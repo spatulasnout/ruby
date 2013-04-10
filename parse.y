@@ -4374,6 +4374,8 @@ f_arglist	: '(' f_args rparen
 		| f_args term
 		    {
 			$$ = $1;
+			lex_state = EXPR_BEG;
+			command_start = TRUE;
 		    }
 		;
 
@@ -5153,7 +5155,7 @@ debug_lines(const char *f)
     if (rb_const_defined_at(rb_cObject, script_lines)) {
 	VALUE hash = rb_const_get_at(rb_cObject, script_lines);
 	if (TYPE(hash) == T_HASH) {
-	    VALUE fname = rb_str_new2(f);
+	    VALUE fname = rb_external_str_new_with_enc(f, strlen(f), rb_filesystem_encoding());
 	    VALUE lines = rb_ary_new();
 	    rb_hash_aset(hash, fname, lines);
 	    return lines;
@@ -5167,7 +5169,7 @@ coverage(const char *f, int n)
 {
     VALUE coverages = rb_get_coverages();
     if (RTEST(coverages) && RBASIC(coverages)->klass == 0) {
-	VALUE fname = rb_str_new2(f);
+	VALUE fname = rb_external_str_new_with_enc(f, strlen(f), rb_filesystem_encoding());
 	VALUE lines = rb_ary_new2(n);
 	int i;
 	RBASIC(lines)->klass = 0;
@@ -5290,9 +5292,11 @@ lex_getline(struct parser_params *parser)
     return line;
 }
 
+#ifdef RIPPER
+static rb_data_type_t parser_data_type;
+#else
 static const rb_data_type_t parser_data_type;
 
-#ifndef RIPPER
 static NODE*
 parser_compile_string(volatile VALUE vparser, const char *f, VALUE s, int line)
 {
@@ -5411,6 +5415,7 @@ parser_str_new(const char *p, long n, rb_encoding *enc, int func, rb_encoding *e
 }
 
 #define lex_goto_eol(parser) ((parser)->parser_lex_p = (parser)->parser_lex_pend)
+#define lex_eol_p() (lex_p >= lex_pend)
 #define peek(c) peek_n((c), 0)
 #define peek_n(c,n) (lex_p+(n) < lex_pend && (c) == (unsigned char)lex_p[n])
 
@@ -5437,6 +5442,7 @@ parser_nextc(struct parser_params *parser)
 	    if (parser->tokp < lex_pend) {
 		if (NIL_P(parser->delayed)) {
 		    parser->delayed = rb_str_buf_new(1024);
+		    rb_enc_associate(parser->delayed, parser->enc);
 		    rb_str_buf_cat(parser->delayed,
 				   parser->tokp, lex_pend - parser->tokp);
 		    parser->delayed_line = ruby_sourceline;
@@ -5920,6 +5926,11 @@ parser_tokadd_string(struct parser_params *parser,
 		continue;
 
 	      default:
+		if (c == -1) return -1;
+		if (!ISASCII(c)) {
+		    if ((func & STR_FUNC_EXPAND) == 0) tokadd('\\');
+		    goto non_ascii;
+		}
 		if (func & STR_FUNC_REGEXP) {
 		    pushback(c);
 		    if ((c = tokadd_escape(&enc)) < 0)
@@ -5945,6 +5956,7 @@ parser_tokadd_string(struct parser_params *parser,
 	    }
 	}
 	else if (!parser_isascii()) {
+	  non_ascii:
 	    has_nonascii = 1;
 	    if (enc != *encp) {
 		mixed_error(enc, *encp);
@@ -5972,6 +5984,25 @@ parser_tokadd_string(struct parser_params *parser,
 
 #define NEW_STRTERM(func, term, paren) \
 	rb_node_newnode(NODE_STRTERM, (func), (term) | ((paren) << (CHAR_BIT * 2)), 0)
+
+#ifdef RIPPER
+static void
+ripper_flush_string_content(struct parser_params *parser, rb_encoding *enc)
+{
+    if (!NIL_P(parser->delayed)) {
+	ptrdiff_t len = lex_p - parser->tokp;
+	if (len > 0) {
+	    rb_enc_str_buf_cat(parser->delayed, parser->tokp, len, enc);
+	}
+	ripper_dispatch_delayed_token(parser, tSTRING_CONTENT);
+	parser->tokp = lex_p;
+    }
+}
+
+#define flush_string_content(enc) ripper_flush_string_content(parser, (enc))
+#else
+#define flush_string_content(enc) ((void)(enc))
+#endif
 
 static int
 parser_parse_string(struct parser_params *parser, NODE *quote)
@@ -6031,17 +6062,7 @@ parser_parse_string(struct parser_params *parser, NODE *quote)
 
     tokfix();
     set_yylval_str(STR_NEW3(tok(), toklen(), enc, func));
-
-#ifdef RIPPER
-    if (!NIL_P(parser->delayed)) {
-	ptrdiff_t len = lex_p - parser->tokp;
-	if (len > 0) {
-	    rb_enc_str_buf_cat(parser->delayed, parser->tokp, len, enc);
-	}
-	ripper_dispatch_delayed_token(parser, tSTRING_CONTENT);
-	parser->tokp = lex_p;
-    }
-#endif
+    flush_string_content(enc);
 
     return tSTRING_CONTENT;
 }
@@ -6246,6 +6267,7 @@ parser_here_document(struct parser_params *parser, NODE *here)
 	    }
 	    if (c != '\n') {
 		set_yylval_str(STR_NEW3(tok(), toklen(), enc, func));
+		flush_string_content(enc);
 		return tSTRING_CONTENT;
 	    }
 	    tokadd(nextc());
@@ -7002,6 +7024,10 @@ parser_yylex(struct parser_params *parser)
                 else {
                     tokadd(c);
                 }
+            }
+            else if (!lex_eol_p() && !(c = *lex_p, ISASCII(c))) {
+                nextc();
+                if (tokadd_mbchar(c) == -1) return 0;
             }
             else {
                 c = read_escape(0, &enc);
@@ -7897,7 +7923,8 @@ parser_yylex(struct parser_params *parser)
             ID ident = TOK_INTERN(!ENC_SINGLE(mb));
 
             set_yylval_name(ident);
-            if (last_state != EXPR_DOT && is_local_id(ident) && lvar_defined(ident)) {
+            if (last_state != EXPR_DOT && last_state != EXPR_FNAME &&
+		is_local_id(ident) && lvar_defined(ident)) {
                 lex_state = EXPR_END;
             }
         }
@@ -10185,7 +10212,11 @@ parser_memsize(const void *ptr)
     return size;
 }
 
-static const rb_data_type_t parser_data_type = {
+static
+#ifndef RIPPER
+const
+#endif
+rb_data_type_t parser_data_type = {
     "parser",
     {
 	parser_mark,
@@ -10801,11 +10832,19 @@ ripper_value(VALUE self, VALUE obj)
 }
 #endif
 
+
+void
+InitVM_ripper(void)
+{
+    parser_data_type.parent = RTYPEDDATA_TYPE(rb_parser_new());
+}
+
 void
 Init_ripper(void)
 {
     VALUE Ripper;
 
+    InitVM(ripper);
     Ripper = rb_define_class("Ripper", rb_cObject);
     rb_define_const(Ripper, "Version", rb_usascii_str_new2(RIPPER_VERSION));
     rb_define_alloc_func(Ripper, ripper_s_allocate);

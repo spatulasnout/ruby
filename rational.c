@@ -1108,6 +1108,8 @@ nurat_coerce(VALUE self, VALUE other)
 	if (k_exact_zero_p(RCOMPLEX(other)->imag))
 	    return rb_assoc_new(f_rational_new_bang1
 				(CLASS_OF(self), RCOMPLEX(other)->real), self);
+	else
+	    return rb_assoc_new(other, rb_Complex(self, INT2FIX(0)));
     }
 
     rb_raise(rb_eTypeError, "%s can't be coerced into %s",
@@ -1604,6 +1606,8 @@ nurat_marshal_load(VALUE self, VALUE a)
 {
     get_dat1(self);
     Check_Type(a, T_ARRAY);
+    if (RARRAY_LEN(a) != 2)
+	rb_raise(rb_eArgError, "marshaled rational must have an array whose length is 2 but %ld", RARRAY_LEN(a));
     dat->num = RARRAY_PTR(a)[0];
     dat->den = RARRAY_PTR(a)[1];
     rb_copy_generic_ivar(self, a);

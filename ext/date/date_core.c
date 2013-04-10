@@ -39,6 +39,7 @@ static double positive_inf, negative_inf;
 #define f_truncate(x) rb_funcall(x, rb_intern("truncate"), 0)
 #define f_round(x) rb_funcall(x, rb_intern("round"), 0)
 
+#define f_to_i(x) rb_funcall(x, rb_intern("to_i"), 0)
 #define f_to_r(x) rb_funcall(x, rb_intern("to_r"), 0)
 #define f_to_s(x) rb_funcall(x, rb_intern("to_s"), 0)
 #define f_inspect(x) rb_funcall(x, rb_intern("inspect"), 0)
@@ -1324,8 +1325,10 @@ encode_year(VALUE nth, int y, double style,
 static void
 decode_jd(VALUE jd, VALUE *nth, int *rjd)
 {
+    assert(FIXNUM_P(jd) || RB_TYPE_P(jd, T_BIGNUM));
     *nth = f_idiv(jd, INT2FIX(CM_PERIOD));
     if (f_zero_p(*nth)) {
+	assert(FIXNUM_P(jd));
 	*rjd = FIX2INT(jd);
 	return;
     }
@@ -2378,7 +2381,7 @@ offset_to_sec(VALUE vof, int *rof)
 	    n = FIX2LONG(vs);
 	    if (n < -DAY_IN_SECONDS || n > DAY_IN_SECONDS)
 		return 0;
-	    *rof = n;
+	    *rof = (int)n;
 	    return 1;
 	}
     }
@@ -3095,14 +3098,23 @@ wholenum_p(VALUE x)
 }
 
 inline static VALUE
+to_integer(VALUE x)
+{
+    if (FIXNUM_P(x) || RB_TYPE_P(x, T_BIGNUM))
+	return x;
+    return f_to_i(x);
+}
+
+inline static VALUE
 d_trunc(VALUE d, VALUE *fr)
 {
     VALUE rd;
 
     if (wholenum_p(d)) {
-	rd = d;
+	rd = to_integer(d);
 	*fr = INT2FIX(0);
-    } else {
+    }
+    else {
 	rd = f_idiv(d, INT2FIX(1));
 	*fr = f_mod(d, INT2FIX(1));
     }
@@ -3118,9 +3130,10 @@ h_trunc(VALUE h, VALUE *fr)
     VALUE rh;
 
     if (wholenum_p(h)) {
-	rh = h;
+	rh = to_integer(h);
 	*fr = INT2FIX(0);
-    } else {
+    }
+    else {
 	rh = f_idiv(h, INT2FIX(1));
 	*fr = f_mod(h, INT2FIX(1));
 	*fr = f_quo(*fr, INT2FIX(24));
@@ -3134,9 +3147,10 @@ min_trunc(VALUE min, VALUE *fr)
     VALUE rmin;
 
     if (wholenum_p(min)) {
-	rmin = min;
+	rmin = to_integer(min);
 	*fr = INT2FIX(0);
-    } else {
+    }
+    else {
 	rmin = f_idiv(min, INT2FIX(1));
 	*fr = f_mod(min, INT2FIX(1));
 	*fr = f_quo(*fr, INT2FIX(1440));
@@ -3150,9 +3164,10 @@ s_trunc(VALUE s, VALUE *fr)
     VALUE rs;
 
     if (wholenum_p(s)) {
-	rs = s;
+	rs = to_integer(s);
 	*fr = INT2FIX(0);
-    } else {
+    }
+    else {
 	rs = f_idiv(s, INT2FIX(1));
 	*fr = f_mod(s, INT2FIX(1));
 	*fr = f_quo(*fr, INT2FIX(86400));
@@ -3569,6 +3584,15 @@ date_s_nth_kday(int argc, VALUE *argv, VALUE klass)
 
 #if !defined(HAVE_GMTIME_R)
 static struct tm*
+gmtime_r(const time_t *t, struct tm *tm)
+{
+    auto struct tm *tmp = gmtime(t);
+    if (tmp)
+	*tm = *tmp;
+    return tmp;
+}
+
+static struct tm*
 localtime_r(const time_t *t, struct tm *tm)
 {
     auto struct tm *tmp = localtime(t);
@@ -3608,6 +3632,7 @@ date_s_today(int argc, VALUE *argv, VALUE klass)
 
     if (time(&t) == -1)
 	rb_sys_fail("time");
+    tzset();
     if (!localtime_r(&t, &tm))
 	rb_sys_fail("localtime");
 
@@ -4088,6 +4113,9 @@ d_new_by_frags(VALUE klass, VALUE hash, VALUE sg)
 	sg = INT2FIX(DEFAULT_SG);
 	rb_warning("invalid start is ignored");
     }
+
+    if (NIL_P(hash))
+	rb_raise(rb_eArgError, "invalid date");
 
     if (NIL_P(ref_hash("jd")) &&
 	NIL_P(ref_hash("yday")) &&
@@ -6606,30 +6634,39 @@ static VALUE
 mk_inspect_raw(union DateData *x, const char *klass)
 {
     if (simple_dat_p(x)) {
+	VALUE nth, flags;
+
+	RB_GC_GUARD(nth) = f_inspect(x->s.nth);
+	RB_GC_GUARD(flags) = mk_inspect_flags(x);
+
 	return rb_enc_sprintf(rb_usascii_encoding(),
 			      "#<%s: "
 			      "(%sth,%dj),+0s,%.0fj; "
 			      "%dy%dm%dd; %s>",
 			      klass ? klass : "?",
-			      RSTRING_PTR(f_inspect(x->s.nth)),
-			      x->s.jd, x->s.sg,
+			      RSTRING_PTR(nth), x->s.jd, x->s.sg,
 #ifndef USE_PACK
 			      x->s.year, x->s.mon, x->s.mday,
 #else
 			      x->s.year,
 			      EX_MON(x->s.pc), EX_MDAY(x->s.pc),
 #endif
-			      RSTRING_PTR(mk_inspect_flags(x)));
+			      RSTRING_PTR(flags));
     }
     else {
+	VALUE nth, sf, flags;
+
+	RB_GC_GUARD(nth) = f_inspect(x->c.nth);
+	RB_GC_GUARD(sf) = f_inspect(x->c.sf);
+	RB_GC_GUARD(flags) = mk_inspect_flags(x);
+
 	return rb_enc_sprintf(rb_usascii_encoding(),
 			      "#<%s: "
 			      "(%sth,%dj,%ds,%sn),%+ds,%.0fj; "
 			      "%dy%dm%dd %dh%dm%ds; %s>",
 			      klass ? klass : "?",
-			      RSTRING_PTR(f_inspect(x->c.nth)),
-			      x->c.jd, x->c.df,
-			      RSTRING_PTR(f_inspect(x->c.sf)),
+			      RSTRING_PTR(nth), x->c.jd, x->c.df,
+			      RSTRING_PTR(sf),
 			      x->c.of, x->c.sg,
 #ifndef USE_PACK
 			      x->c.year, x->c.mon, x->c.mday,
@@ -6640,7 +6677,7 @@ mk_inspect_raw(union DateData *x, const char *klass)
 			      EX_HOUR(x->c.pc), EX_MIN(x->c.pc),
 			      EX_SEC(x->c.pc),
 #endif
-			      RSTRING_PTR(mk_inspect_flags(x)));
+			      RSTRING_PTR(flags));
     }
 }
 
@@ -6655,12 +6692,16 @@ d_lite_inspect_raw(VALUE self)
 static VALUE
 mk_inspect(union DateData *x, const char *klass, const char *to_s)
 {
+    VALUE jd, sf;
+
+    RB_GC_GUARD(jd) = f_inspect(m_real_jd(x));
+    RB_GC_GUARD(sf) = f_inspect(m_sf(x));
+
     return rb_enc_sprintf(rb_usascii_encoding(),
 			  "#<%s: %s ((%sj,%ds,%sn),%+ds,%.0fj)>",
 			  klass ? klass : "?",
 			  to_s ? to_s : "?",
-			  RSTRING_PTR(f_inspect(m_real_jd(x))), m_df(x),
-			  RSTRING_PTR(f_inspect(m_sf(x))),
+			  RSTRING_PTR(jd), m_df(x), RSTRING_PTR(sf),
 			  m_of(x), m_sg(x));
 }
 
@@ -6682,8 +6723,12 @@ static VALUE
 d_lite_inspect(VALUE self)
 {
     get_d1(self);
-    return mk_inspect(dat, rb_obj_classname(self),
-		      RSTRING_PTR(f_to_s(self)));
+    {
+	VALUE to_s;
+
+	RB_GC_GUARD(to_s) = f_to_s(self);
+	return mk_inspect(dat, rb_obj_classname(self), RSTRING_PTR(to_s));
+    }
 }
 
 #include <errno.h>
@@ -6718,8 +6763,12 @@ date_strftime_alloc(char **buf, const char *format,
 	 * if the buffer is 1024 times bigger than the length of the
 	 * format string, it's not failing for lack of room.
 	 */
-	if (len > 0 || size >= 1024 * flen) break;
+	if (len > 0) break;
 	xfree(*buf);
+	if (size >= 1024 * flen) {
+	    rb_sys_fail(format);
+	    break;
+	}
     }
     return len;
 }
@@ -7799,6 +7848,7 @@ datetime_s_now(int argc, VALUE *argv, VALUE klass)
 	rb_sys_fail("gettimeofday");
     sec = tv.tv_sec;
 #endif
+    tzset();
     if (!localtime_r(&sec, &tm))
 	rb_sys_fail("localtime");
 
@@ -7812,8 +7862,37 @@ datetime_s_now(int argc, VALUE *argv, VALUE klass)
 	s = 59;
 #ifdef HAVE_STRUCT_TM_TM_GMTOFF
     of = tm.tm_gmtoff;
+#elif defined(HAVE_VAR_TIMEZONE)
+#ifdef HAVE_VAR_ALTZONE
+    of = (long)((tm.tm_isdst > 0) ? altzone : timezone);
 #else
-    of = -timezone;
+    of = (long)-timezone;
+    if (tm.tm_isdst) {
+	time_t sec2;
+
+	tm.tm_isdst = 0;
+	sec2 = mktime(&tm);
+	of += (long)difftime(sec2, sec);
+    }
+#endif
+#elif defined(HAVE_TIMEGM)
+    {
+	time_t sec2;
+
+	sec2 = timegm(&tm);
+	of = (long)difftime(sec2, sec);
+    }
+#else
+    {
+	struct tm tm2;
+	time_t sec2;
+
+	if (!gmtime_r(&sec, &tm2))
+	    rb_sys_fail("gmtime");
+	tm2.tm_isdst = tm.tm_isdst;
+	sec2 = mktime(&tm2);
+	of = (long)difftime(sec, sec2);
+    }
 #endif
 #ifdef HAVE_CLOCK_GETTIME
     sf = ts.tv_nsec;
@@ -7852,6 +7931,9 @@ dt_new_by_frags(VALUE klass, VALUE hash, VALUE sg)
 	sg = INT2FIX(DEFAULT_SG);
 	rb_warning("invalid start is ignored");
     }
+
+    if (NIL_P(hash))
+	rb_raise(rb_eArgError, "invalid date");
 
     if (NIL_P(ref_hash("jd")) &&
 	NIL_P(ref_hash("yday")) &&

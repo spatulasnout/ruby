@@ -464,7 +464,11 @@ rb_zlib_crc32_combine(VALUE klass, VALUE crc1, VALUE crc2, VALUE len2)
 static VALUE
 rb_zlib_crc_table(VALUE obj)
 {
-    const unsigned long *crctbl;
+#if !defined(HAVE_TYPE_Z_CRC_T)
+    /* z_crc_t is defined since zlib-1.2.7. */
+    typedef unsigned long z_crc_t;
+#endif
+    const z_crc_t *crctbl;
     VALUE dst;
     int i;
 
@@ -1732,7 +1736,7 @@ do_inflate(struct zstream *z, VALUE src)
 	return;
     }
     StringValue(src);
-    if (RSTRING_LEN(src) > 0) { /* prevent Z_BUF_ERROR */
+    if (RSTRING_LEN(src) > 0 || z->stream.avail_in > 0) { /* prevent Z_BUF_ERROR */
 	zstream_run(z, (Bytef*)RSTRING_PTR(src), RSTRING_LEN(src), Z_SYNC_FLUSH);
     }
 }
@@ -1749,7 +1753,23 @@ do_inflate(struct zstream *z, VALUE src)
  *
  * Raises a Zlib::NeedDict exception if a preset dictionary is needed to
  * decompress.  Set the dictionary by Zlib::Inflate#set_dictionary and then
- * call this method again with an empty string.  (<i>???</i>)
+ * call this method again with an empty string to flush the stream:
+ *
+ *   inflater = Zlib::Inflate.new
+ *
+ *   begin
+ *     out = inflater.inflate compressed
+ *   rescue Zlib::NeedDict
+ *     # ensure the dictionary matches the stream's required dictionary
+ *     raise unless inflater.adler == Zlib.adler32(dictionary)
+ *
+ *     inflater.set_dictionary dictionary
+ *     inflater.inflate ''
+ *   end
+ *
+ *   # ...
+ *
+ *   inflater.close
  *
  * See also Zlib::Inflate.new
  */
@@ -2306,6 +2326,9 @@ gzfile_read_header(struct gzfile *gz)
 	zstream_discard_input(&gz->z, 2 + len);
     }
     if (flags & GZ_FLAG_ORIG_NAME) {
+	if (!gzfile_read_raw_ensure(gz, 1)) {
+	    rb_raise(cGzError, "unexpected end of file");
+	}
 	p = gzfile_read_raw_until_zero(gz, 0);
 	len = p - RSTRING_PTR(gz->z.input);
 	gz->orig_name = rb_str_new(RSTRING_PTR(gz->z.input), len);
@@ -2313,6 +2336,9 @@ gzfile_read_header(struct gzfile *gz)
 	zstream_discard_input(&gz->z, len + 1);
     }
     if (flags & GZ_FLAG_COMMENT) {
+	if (!gzfile_read_raw_ensure(gz, 1)) {
+	    rb_raise(cGzError, "unexpected end of file");
+	}
 	p = gzfile_read_raw_until_zero(gz, 0);
 	len = p - RSTRING_PTR(gz->z.input);
 	gz->comment = rb_str_new(RSTRING_PTR(gz->z.input), len);

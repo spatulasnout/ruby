@@ -76,8 +76,9 @@ static VALUE mJSON, mExt, cParser, eParserError, eNestingError;
 static VALUE CNaN, CInfinity, CMinusInfinity;
 
 static ID i_json_creatable_p, i_json_create, i_create_id, i_create_additions,
-          i_chr, i_max_nesting, i_allow_nan, i_symbolize_names, i_object_class,
-          i_array_class, i_key_p, i_deep_const_get, i_match, i_match_string, i_aset, i_leftshift;
+          i_chr, i_max_nesting, i_allow_nan, i_symbolize_names, i_quirks_mode,
+          i_object_class, i_array_class, i_key_p, i_deep_const_get, i_match,
+          i_match_string, i_aset, i_aref, i_leftshift;
 
 %%{
     machine JSON_common;
@@ -138,13 +139,14 @@ static ID i_json_creatable_p, i_json_create, i_create_id, i_create_additions,
 
     action exit { fhold; fbreak; }
 
-    a_pair  = ignore* begin_name >parse_name
-        ignore* name_separator ignore*
-        begin_value >parse_value;
+    pair  = ignore* begin_name >parse_name ignore* name_separator ignore* begin_value >parse_value;
+    next_pair   = ignore* value_separator pair;
 
-    main := begin_object
-          (a_pair (ignore* value_separator a_pair)*)?
-          ignore* end_object @exit;
+    main := (
+      begin_object
+      (pair (next_pair)*)? ignore*
+      end_object
+    ) @exit;
 }%%
 
 static char *JSON_parse_object(JSON_Parser *json, char *p, char *pe, VALUE *result)
@@ -164,7 +166,12 @@ static char *JSON_parse_object(JSON_Parser *json, char *p, char *pe, VALUE *resu
 
     if (cs >= JSON_object_first_final) {
         if (json->create_additions) {
-            VALUE klassname = rb_hash_aref(*result, json->create_id);
+						VALUE klassname;
+            if (NIL_P(json->object_class)) {
+							klassname = rb_hash_aref(*result, json->create_id);
+						} else {
+							klassname = rb_funcall(*result, i_aref, 1, json->create_id);
+						}
             if (!NIL_P(klassname)) {
                 VALUE klass = rb_funcall(mJSON, i_deep_const_get, 1, klassname);
                 if (RTEST(rb_funcall(klass, i_json_creatable_p, 0))) {
@@ -177,6 +184,7 @@ static char *JSON_parse_object(JSON_Parser *json, char *p, char *pe, VALUE *resu
         return NULL;
     }
 }
+
 
 %%{
     machine JSON_value;
@@ -214,7 +222,7 @@ static char *JSON_parse_object(JSON_Parser *json, char *p, char *pe, VALUE *resu
 
     action parse_number {
         char *np;
-        if(pe > fpc + 9 && !strncmp(MinusInfinity, fpc, 9)) {
+        if(pe > fpc + 9 - json->quirks_mode && !strncmp(MinusInfinity, fpc, 9)) {
             if (json->allow_nan) {
                 *result = CMinusInfinity;
                 fexec p + 10;
@@ -282,7 +290,7 @@ static char *JSON_parse_value(JSON_Parser *json, char *p, char *pe, VALUE *resul
 
     action exit { fhold; fbreak; }
 
-    main := '-'? ('0' | [1-9][0-9]*) (^[0-9] @exit);
+    main := '-'? ('0' | [1-9][0-9]*) (^[0-9]? @exit);
 }%%
 
 static char *JSON_parse_integer(JSON_Parser *json, char *p, char *pe, VALUE *result)
@@ -313,7 +321,7 @@ static char *JSON_parse_integer(JSON_Parser *json, char *p, char *pe, VALUE *res
     main := '-'? (
               (('0' | [1-9][0-9]*) '.' [0-9]+ ([Ee] [+\-]?[0-9]+)?)
               | (('0' | [1-9][0-9]*) ([Ee] [+\-]?[0-9]+))
-             )  (^[0-9Ee.\-] @exit );
+             )  (^[0-9Ee.\-]? @exit );
 }%%
 
 static char *JSON_parse_float(JSON_Parser *json, char *p, char *pe, VALUE *result)
@@ -390,6 +398,7 @@ static VALUE json_string_unescape(VALUE result, char *string, char *stringEnd)
 {
     char *p = string, *pe = string, *unescape;
     int unescape_len;
+    char buf[4];
 
     while (pe < stringEnd) {
         if (*pe == '\\') {
@@ -422,7 +431,6 @@ static VALUE json_string_unescape(VALUE result, char *string, char *stringEnd)
                     if (pe > stringEnd - 4) {
                         return Qnil;
                     } else {
-                        char buf[4];
                         UTF32 ch = unescape_unicode((unsigned char *) ++pe);
                         pe += 3;
                         if (UNI_SUR_HIGH_START == (ch & 0xFC00)) {
@@ -521,34 +529,6 @@ static char *JSON_parse_string(JSON_Parser *json, char *p, char *pe, VALUE *resu
     }
 }
 
-
-%%{
-    machine JSON;
-
-    write data;
-
-    include JSON_common;
-
-    action parse_object {
-        char *np;
-        json->current_nesting = 1;
-        np = JSON_parse_object(json, fpc, pe, &result);
-        if (np == NULL) { fhold; fbreak; } else fexec np;
-    }
-
-    action parse_array {
-        char *np;
-        json->current_nesting = 1;
-        np = JSON_parse_array(json, fpc, pe, &result);
-        if (np == NULL) { fhold; fbreak; } else fexec np;
-    }
-
-    main := ignore* (
-            begin_object >parse_object |
-            begin_array >parse_array
-            ) ignore*;
-}%%
-
 /*
  * Document-class: JSON::Ext::Parser
  *
@@ -627,11 +607,12 @@ static VALUE convert_encoding(VALUE source)
  *   defaults to true.
  * * *object_class*: Defaults to Hash
  * * *array_class*: Defaults to Array
+ * * *quirks_mode*: Enables quirks_mode for parser, that is for example
+ *   parsing single JSON values instead of documents is possible.
+ *
  */
 static VALUE cParser_initialize(int argc, VALUE *argv, VALUE self)
 {
-    char *ptr;
-    long len;
     VALUE source, opts;
     GET_PARSER_INIT;
 
@@ -639,9 +620,6 @@ static VALUE cParser_initialize(int argc, VALUE *argv, VALUE self)
         rb_raise(rb_eTypeError, "already initialized instance");
     }
     rb_scan_args(argc, argv, "11", &source, &opts);
-    source = convert_encoding(StringValue(source));
-    ptr = RSTRING_PTR(source);
-    len = RSTRING_LEN(source);
     if (!NIL_P(opts)) {
         opts = rb_convert_type(opts, T_HASH, "Hash", "to_hash");
         if (NIL_P(opts)) {
@@ -671,11 +649,18 @@ static VALUE cParser_initialize(int argc, VALUE *argv, VALUE self)
             } else {
                 json->symbolize_names = 0;
             }
+            tmp = ID2SYM(i_quirks_mode);
+            if (option_given_p(opts, tmp)) {
+                VALUE quirks_mode = rb_hash_aref(opts, tmp);
+                json->quirks_mode = RTEST(quirks_mode) ? 1 : 0;
+            } else {
+                json->quirks_mode = 0;
+            }
             tmp = ID2SYM(i_create_additions);
             if (option_given_p(opts, tmp)) {
                 json->create_additions = RTEST(rb_hash_aref(opts, tmp));
             } else {
-                json->create_additions = 1;
+                json->create_additions = 0;
             }
             tmp = ID2SYM(i_create_id);
             if (option_given_p(opts, tmp)) {
@@ -711,20 +696,44 @@ static VALUE cParser_initialize(int argc, VALUE *argv, VALUE self)
         json->object_class = Qnil;
         json->array_class = Qnil;
     }
+    if (!json->quirks_mode) {
+      source = convert_encoding(StringValue(source));
+    }
     json->current_nesting = 0;
-    json->len = len;
-    json->source = ptr;
+    json->len = RSTRING_LEN(source);
+    json->source = RSTRING_PTR(source);;
     json->Vsource = source;
     return self;
 }
 
-/*
- * call-seq: parse()
- *
- *  Parses the current JSON text _source_ and returns the complete data
- *  structure as a result.
- */
-static VALUE cParser_parse(VALUE self)
+%%{
+    machine JSON;
+
+    write data;
+
+    include JSON_common;
+
+    action parse_object {
+        char *np;
+        json->current_nesting = 1;
+        np = JSON_parse_object(json, fpc, pe, &result);
+        if (np == NULL) { fhold; fbreak; } else fexec np;
+    }
+
+    action parse_array {
+        char *np;
+        json->current_nesting = 1;
+        np = JSON_parse_array(json, fpc, pe, &result);
+        if (np == NULL) { fhold; fbreak; } else fexec np;
+    }
+
+    main := ignore* (
+            begin_object >parse_object |
+            begin_array >parse_array
+            ) ignore*;
+}%%
+
+static VALUE cParser_parse_strict(VALUE self)
 {
     char *p, *pe;
     int cs = EVIL;
@@ -743,6 +752,62 @@ static VALUE cParser_parse(VALUE self)
         return Qnil;
     }
 }
+
+
+%%{
+    machine JSON_quirks_mode;
+
+    write data;
+
+    include JSON_common;
+
+    action parse_value {
+        char *np = JSON_parse_value(json, fpc, pe, &result);
+        if (np == NULL) { fhold; fbreak; } else fexec np;
+    }
+
+    main := ignore* (
+            begin_value >parse_value
+            ) ignore*;
+}%%
+
+static VALUE cParser_parse_quirks_mode(VALUE self)
+{
+    char *p, *pe;
+    int cs = EVIL;
+    VALUE result = Qnil;
+    GET_PARSER;
+
+    %% write init;
+    p = json->source;
+    pe = p + json->len;
+    %% write exec;
+
+    if (cs >= JSON_quirks_mode_first_final && p == pe) {
+        return result;
+    } else {
+        rb_raise(eParserError, "%u: unexpected token at '%s'", __LINE__, p);
+        return Qnil;
+    }
+}
+
+/*
+ * call-seq: parse()
+ *
+ *  Parses the current JSON text _source_ and returns the complete data
+ *  structure as a result.
+ */
+static VALUE cParser_parse(VALUE self)
+{
+  GET_PARSER;
+
+  if (json->quirks_mode) {
+    return cParser_parse_quirks_mode(self);
+  } else {
+    return cParser_parse_strict(self);
+  }
+}
+
 
 static JSON_Parser *JSON_allocate()
 {
@@ -783,6 +848,18 @@ static VALUE cParser_source(VALUE self)
     return rb_str_dup(json->Vsource);
 }
 
+/*
+ * call-seq: quirks_mode?()
+ *
+ * Returns a true, if this parser is in quirks_mode, false otherwise.
+ */
+static VALUE cParser_quirks_mode_p(VALUE self)
+{
+    GET_PARSER;
+    return json->quirks_mode ? Qtrue : Qfalse;
+}
+
+
 void Init_parser()
 {
     rb_require("json/common");
@@ -795,6 +872,7 @@ void Init_parser()
     rb_define_method(cParser, "initialize", cParser_initialize, -1);
     rb_define_method(cParser, "parse", cParser_parse, 0);
     rb_define_method(cParser, "source", cParser_source, 0);
+    rb_define_method(cParser, "quirks_mode?", cParser_quirks_mode_p, 0);
 
     CNaN = rb_const_get(mJSON, rb_intern("NaN"));
     CInfinity = rb_const_get(mJSON, rb_intern("Infinity"));
@@ -808,6 +886,7 @@ void Init_parser()
     i_max_nesting = rb_intern("max_nesting");
     i_allow_nan = rb_intern("allow_nan");
     i_symbolize_names = rb_intern("symbolize_names");
+    i_quirks_mode = rb_intern("quirks_mode");
     i_object_class = rb_intern("object_class");
     i_array_class = rb_intern("array_class");
     i_match = rb_intern("match");
@@ -815,6 +894,7 @@ void Init_parser()
     i_key_p = rb_intern("key?");
     i_deep_const_get = rb_intern("deep_const_get");
     i_aset = rb_intern("[]=");
+    i_aref = rb_intern("[]");
     i_leftshift = rb_intern("<<");
 #ifdef HAVE_RUBY_ENCODING_H
     CEncoding_UTF_8 = rb_funcall(rb_path2class("Encoding"), rb_intern("find"), 1, rb_str_new2("utf-8"));

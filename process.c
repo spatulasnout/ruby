@@ -29,6 +29,9 @@
 #ifdef HAVE_FCNTL_H
 #include <fcntl.h>
 #endif
+#ifdef HAVE_PROCESS_H
+#include <process.h>
+#endif
 
 #include <time.h>
 #include <ctype.h>
@@ -107,9 +110,11 @@ static VALUE rb_cProcessTms;
 
 #ifdef BROKEN_SETREUID
 #define setreuid ruby_setreuid
+int setreuid(rb_uid_t ruid, rb_uid_t euid);
 #endif
 #ifdef BROKEN_SETREGID
 #define setregid ruby_setregid
+int setregid(rb_gid_t rgid, rb_gid_t egid);
 #endif
 
 #if defined(HAVE_44BSD_SETUID) || defined(__MacOS_X__)
@@ -1211,11 +1216,35 @@ rb_proc_exec(const char *str)
 #endif	/* _WIN32 */
 }
 
+enum {
+    EXEC_OPTION_PGROUP,
+    EXEC_OPTION_RLIMIT,
+    EXEC_OPTION_UNSETENV_OTHERS,
+    EXEC_OPTION_ENV,
+    EXEC_OPTION_CHDIR,
+    EXEC_OPTION_UMASK,
+    EXEC_OPTION_DUP2,
+    EXEC_OPTION_CLOSE,
+    EXEC_OPTION_OPEN,
+    EXEC_OPTION_DUP2_CHILD,
+    EXEC_OPTION_CLOSE_OTHERS,
+    EXEC_OPTION_NEW_PGROUP
+};
+
 #if defined(_WIN32)
 #define HAVE_SPAWNV 1
 #endif
 
 #if !defined(HAVE_FORK) && defined(HAVE_SPAWNV)
+# define USE_SPAWNV 1
+#else
+# define USE_SPAWNV 0
+#endif
+#ifndef P_NOWAIT
+# define P_NOWAIT _P_NOWAIT
+#endif
+
+#if USE_SPAWNV
 #if defined(_WIN32)
 #define proc_spawn_v(argv, prog) rb_w32_aspawn(P_NOWAIT, (prog), (argv))
 #else
@@ -1233,20 +1262,21 @@ proc_spawn_v(char **argv, char *prog)
 	return -1;
 
     before_exec();
-    status = spawnv(P_WAIT, prog, argv);
-    preserving_errno({
-	rb_last_status_set(status == -1 ? 127 : status, 0);
+    status = spawnv(P_NOWAIT, prog, (const char **)argv);
+    if (status == -1 && errno == ENOEXEC) {
 	*argv = (char *)prog;
 	*--argv = (char *)"sh";
-	status = spawnv("/bin/sh", argv);
+	status = spawnv(P_NOWAIT, "/bin/sh", (const char **)argv);
 	after_exec();
-    });
+	if (status == -1) errno = ENOEXEC;
+    }
+    rb_last_status_set(status == -1 ? 127 : status, 0);
     return status;
 }
 #endif
 
 static rb_pid_t
-proc_spawn_n(int argc, VALUE *argv, VALUE prog)
+proc_spawn_n(int argc, VALUE *argv, VALUE prog, VALUE options)
 {
     char **args;
     int i;
@@ -1258,8 +1288,17 @@ proc_spawn_n(int argc, VALUE *argv, VALUE prog)
 	args[i] = RSTRING_PTR(argv[i]);
     }
     args[i] = (char*) 0;
-    if (args[0])
+    if (args[0]) {
+#if defined(_WIN32)
+	DWORD flags = 0;
+	if (RTEST(rb_ary_entry(options, EXEC_OPTION_NEW_PGROUP))) {
+	    flags = CREATE_NEW_PROCESS_GROUP;
+	}
+	pid = rb_w32_aspawn_flags(P_NOWAIT, prog ? RSTRING_PTR(prog) : 0, args, flags);
+#else
 	pid = proc_spawn_v(args, prog ? RSTRING_PTR(prog) : 0);
+#endif
+    }
     ALLOCV_END(v);
     return pid;
 }
@@ -1280,7 +1319,7 @@ proc_spawn(char *str)
 	if (*s != ' ' && !ISALPHA(*s) && strchr("*?{}[]<>()~&|\\$;'`\"\n",*s)) {
 	    char *shell = dln_find_exe_r("sh", 0, fbuf, sizeof(fbuf));
 	    before_exec();
-	    status = shell?spawnl(P_WAIT,shell,"sh","-c",str,(char*)NULL):system(str);
+	    status = spawnl(P_NOWAIT, (shell ? shell : "/bin/sh"), "sh", "-c", str, (char*)NULL);
 	    rb_last_status_set(status == -1 ? 127 : status, 0);
 	    after_exec();
 	    return status;
@@ -1306,20 +1345,6 @@ hide_obj(VALUE obj)
     RBASIC(obj)->klass = 0;
     return obj;
 }
-
-enum {
-    EXEC_OPTION_PGROUP,
-    EXEC_OPTION_RLIMIT,
-    EXEC_OPTION_UNSETENV_OTHERS,
-    EXEC_OPTION_ENV,
-    EXEC_OPTION_CHDIR,
-    EXEC_OPTION_UMASK,
-    EXEC_OPTION_DUP2,
-    EXEC_OPTION_CLOSE,
-    EXEC_OPTION_OPEN,
-    EXEC_OPTION_DUP2_CHILD,
-    EXEC_OPTION_CLOSE_OTHERS
-};
 
 static VALUE
 check_exec_redirect_fd(VALUE v, int iskey)
@@ -1501,6 +1526,16 @@ rb_exec_arg_addopt(struct rb_exec_arg *e, VALUE key, VALUE val)
                 val = PIDT2NUM(pgroup);
             }
             rb_ary_store(options, EXEC_OPTION_PGROUP, val);
+        }
+        else
+#endif
+#ifdef _WIN32
+        if (id == rb_intern("new_pgroup")) {
+            if (!NIL_P(rb_ary_entry(options, EXEC_OPTION_NEW_PGROUP))) {
+                rb_raise(rb_eArgError, "new_pgroup option specified twice");
+            }
+            val = RTEST(val) ? Qtrue : Qfalse;
+            rb_ary_store(options, EXEC_OPTION_NEW_PGROUP, val);
         }
         else
 #endif
@@ -3011,16 +3046,16 @@ static rb_pid_t
 rb_spawn_process(struct rb_exec_arg *earg, VALUE prog, char *errmsg, size_t errmsg_buflen)
 {
     rb_pid_t pid;
-#if defined HAVE_FORK || !defined HAVE_SPAWNV
+#if !USE_SPAWNV
     int status;
 #endif
-#if !defined HAVE_FORK
+#if !defined HAVE_FORK || USE_SPAWNV
     struct rb_exec_arg sarg;
     int argc;
     VALUE *argv;
 #endif
 
-#if defined HAVE_FORK
+#if defined HAVE_FORK && !USE_SPAWNV
     pid = rb_fork_err(&status, rb_exec_atfork, earg, earg->redirect_fds, errmsg, errmsg_buflen);
 #else
     if (rb_run_exec_options_err(earg, &sarg, errmsg, errmsg_buflen) < 0) {
@@ -3035,7 +3070,7 @@ rb_spawn_process(struct rb_exec_arg *earg, VALUE prog, char *errmsg, size_t errm
 	pid = proc_spawn(RSTRING_PTR(prog));
     }
     else {
-	pid = proc_spawn_n(argc, argv, prog);
+	pid = proc_spawn_n(argc, argv, prog, earg->options);
     }
 #  if defined(_WIN32)
     if (pid == -1)
@@ -3170,6 +3205,9 @@ rb_f_system(int argc, VALUE *argv)
  *        :pgroup => true or 0 : make a new process group
  *        :pgroup => pgid      : join to specified process group
  *        :pgroup => nil       : don't change the process group (default)
+ *      create new process group: Windows only
+ *        :new_pgroup => true  : the new process is the root process of a new process group
+ *        :new_pgroup => false : don't create a new process group (default)
  *      resource limit: resourcename is core, cpu, data, etc.  See Process.setrlimit.
  *        :rlimit_resourcename => limit
  *        :rlimit_resourcename => [cur_limit, max_limit]
@@ -3209,6 +3247,7 @@ rb_f_system(int argc, VALUE *argv)
  *  If a hash is given as +options+,
  *  it specifies
  *  process group,
+ *  create new process group,
  *  resource limit,
  *  current directory,
  *  umask and
@@ -3229,6 +3268,17 @@ rb_f_system(int argc, VALUE *argv)
  *
  *    pid = spawn(command, :pgroup=>true) # process leader
  *    pid = spawn(command, :pgroup=>10) # belongs to the process group 10
+ *
+ *  The <code>:new_pgroup</code> key in +options+ specifies to pass
+ *  +CREATE_NEW_PROCESS_GROUP+ flag to <code>CreateProcessW()</code> that is
+ *  Windows API. This option is only for Windows.
+ *  true means the new process is the root process of the new process group.
+ *  The new process has CTRL+C disabled. This flag is necessary for
+ *  <code>Process.kill(:SIGINT, pid)</code> on the subprocess.
+ *  :new_pgroup is false by default.
+ *
+ *    pid = spawn(command, :new_pgroup=>true)  # new process group
+ *    pid = spawn(command, :new_pgroup=>false) # same process group
  *
  *  The <code>:rlimit_</code><em>foo</em> key specifies a resource limit.
  *  <em>foo</em> should be one of resource types such as <code>core</code>.
@@ -4201,11 +4251,11 @@ static rb_uid_t SAVED_USER_ID = -1;
 int
 setreuid(rb_uid_t ruid, rb_uid_t euid)
 {
-    if (ruid != -1 && ruid != getuid()) {
-	if (euid == -1) euid = geteuid();
+    if (ruid != (rb_uid_t)-1 && ruid != getuid()) {
+	if (euid == (rb_uid_t)-1) euid = geteuid();
 	if (setuid(ruid) < 0) return -1;
     }
-    if (euid != -1 && euid != geteuid()) {
+    if (euid != (rb_uid_t)-1 && euid != geteuid()) {
 	if (seteuid(euid) < 0) return -1;
     }
     return 0;
@@ -4913,11 +4963,11 @@ static rb_gid_t SAVED_GROUP_ID = -1;
 int
 setregid(rb_gid_t rgid, rb_gid_t egid)
 {
-    if (rgid != -1 && rgid != getgid()) {
-	if (egid == -1) egid = getegid();
+    if (rgid != (rb_gid_t)-1 && rgid != getgid()) {
+	if (egid == (rb_gid_t)-1) egid = getegid();
 	if (setgid(rgid) < 0) return -1;
     }
-    if (egid != -1 && egid != getegid()) {
+    if (egid != (rb_gid_t)-1 && egid != getegid()) {
 	if (setegid(egid) < 0) return -1;
     }
     return 0;

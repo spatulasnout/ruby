@@ -31,6 +31,11 @@ extern "C" {
 #else
 # include <varargs.h>
 #endif
+
+#if defined(HAVE_SYS_TYPES_H)
+#include <sys/types.h>
+#endif
+
 #include "ruby/st.h"
 
 #if defined __GNUC__ && __GNUC__ >= 4
@@ -122,6 +127,7 @@ VALUE rb_dbl2big(double);
 double rb_big2dbl(VALUE);
 VALUE rb_big_cmp(VALUE, VALUE);
 VALUE rb_big_eq(VALUE, VALUE);
+VALUE rb_big_eql(VALUE, VALUE);
 VALUE rb_big_plus(VALUE, VALUE);
 VALUE rb_big_minus(VALUE, VALUE);
 VALUE rb_big_mul(VALUE, VALUE);
@@ -270,6 +276,8 @@ void rb_fd_term(rb_fdset_t *);
 void rb_fd_set(int, rb_fdset_t *);
 #define rb_fd_clr(n, f)		rb_w32_fdclr((n), (f)->fdset)
 #define rb_fd_isset(n, f)	rb_w32_fdisset((n), (f)->fdset)
+#define rb_fd_copy(d, s, n)	rb_w32_fd_copy((d), (s), (n))
+void rb_w32_fd_copy(rb_fdset_t *, const fd_set *, int);
 #define rb_fd_dup(d, s)	rb_w32_fd_dup((d), (s))
 void rb_w32_fd_dup(rb_fdset_t *dst, const rb_fdset_t *src);
 #define rb_fd_select(n, rfds, wfds, efds, timeout)	rb_w32_select((n), (rfds) ? ((rb_fdset_t*)(rfds))->fdset : NULL, (wfds) ? ((rb_fdset_t*)(wfds))->fdset : NULL, (efds) ? ((rb_fdset_t*)(efds))->fdset: NULL, (timeout))
@@ -400,15 +408,9 @@ int rb_find_file_ext_safe(VALUE*, const char* const*, int);
 VALUE rb_find_file_safe(VALUE, int);
 int rb_find_file_ext(VALUE*, const char* const*);
 VALUE rb_find_file(VALUE);
-char *rb_path_next(const char *);
-char *rb_path_skip_prefix(const char *);
-char *rb_path_last_separator(const char *);
-char *rb_path_end(const char *);
 VALUE rb_file_directory_p(VALUE,VALUE);
 VALUE rb_str_encode_ospath(VALUE);
 int rb_is_absolute_path(const char *);
-const char *ruby_find_basename(const char *name, long *baselen, long *alllen);
-const char *ruby_find_extname(const char *name, long *len);
 /* gc.c */
 void ruby_set_stack_size(size_t);
 NORETURN(void rb_memerror(void));
@@ -490,7 +492,7 @@ VALUE rb_marshal_dump(VALUE, VALUE);
 VALUE rb_marshal_load(VALUE);
 void rb_marshal_define_compat(VALUE newclass, VALUE oldclass, VALUE (*dumper)(VALUE), VALUE (*loader)(VALUE, VALUE));
 /* numeric.c */
-void rb_num_zerodiv(void);
+NORETURN(void rb_num_zerodiv(void));
 #define RB_NUM_COERCE_FUNCS_NEED_OPID 1
 VALUE rb_num_coerce_bin(VALUE, VALUE, ID);
 VALUE rb_num_coerce_cmp(VALUE, VALUE, ID);
@@ -689,6 +691,7 @@ long rb_str_sublen(VALUE, long);
 VALUE rb_str_substr(VALUE, long, long);
 VALUE rb_str_subseq(VALUE, long, long);
 void rb_str_modify(VALUE);
+void rb_str_modify_expand(VALUE, long);
 VALUE rb_str_freeze(VALUE);
 void rb_str_set_len(VALUE, long);
 VALUE rb_str_resize(VALUE, long);

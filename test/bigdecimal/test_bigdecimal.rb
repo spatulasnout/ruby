@@ -1,4 +1,5 @@
 require_relative "testbase"
+require_relative "../ruby/envutil"
 
 require 'thread'
 
@@ -557,6 +558,10 @@ class TestBigDecimal < Test::Unit::TestCase
 
     a, b = BigDecimal("0.11111").coerce(1.quo(3))
     assert_equal(BigDecimal("0." + "3"*a.precs[0]), a)
+
+    assert_nothing_raised(TypeError, '#7176') do
+      BigDecimal.new('1') + Rational(1)
+    end
   end
 
   def test_uplus
@@ -592,12 +597,28 @@ class TestBigDecimal < Test::Unit::TestCase
     assert_equal(BigDecimal.new((2**100-1).to_s), x - 1)
   end
 
+  def test_sub_with_float
+    assert_kind_of(BigDecimal, BigDecimal.new("3") - 1.0)
+  end
+
+  def test_sub_with_rational
+    assert_kind_of(BigDecimal, BigDecimal.new("3") - 1.quo(3))
+  end
+
   def test_mult
     x = BigDecimal.new((2**100).to_s)
     assert_equal(BigDecimal.new((2**100 * 3).to_s), (x * 3).to_i)
     assert_equal(x, (x * 1).to_i)
     assert_equal(x, (BigDecimal("1") * x).to_i)
     assert_equal(BigDecimal.new((2**200).to_s), (x * x).to_i)
+  end
+
+  def test_mult_with_float
+    assert_kind_of(BigDecimal, BigDecimal.new("3") * 1.5)
+  end
+
+  def test_mult_with_rational
+    assert_kind_of(BigDecimal, BigDecimal.new("3") * 1.quo(3))
   end
 
   def test_div
@@ -609,6 +630,14 @@ class TestBigDecimal < Test::Unit::TestCase
     assert_equal(-2, BigDecimal.new("2") / -1)
   end
 
+  def test_div_with_float
+    assert_kind_of(BigDecimal, BigDecimal.new("3") / 1.5)
+  end
+
+  def test_div_with_rational
+    assert_kind_of(BigDecimal, BigDecimal.new("3") / 1.quo(3))
+  end
+
   def test_mod
     x = BigDecimal.new((2**100).to_s)
     assert_equal(1, x % 3)
@@ -617,12 +646,28 @@ class TestBigDecimal < Test::Unit::TestCase
     assert_equal(-1, (-x) % -3)
   end
 
+  def test_mod_with_float
+    assert_kind_of(BigDecimal, BigDecimal.new("3") % 1.5)
+  end
+
+  def test_mod_with_rational
+    assert_kind_of(BigDecimal, BigDecimal.new("3") % 1.quo(3))
+  end
+
   def test_remainder
     x = BigDecimal.new((2**100).to_s)
     assert_equal(1, x.remainder(3))
     assert_equal(-1, (-x).remainder(3))
     assert_equal(1, x.remainder(-3))
     assert_equal(-1, (-x).remainder(-3))
+  end
+
+  def test_remainder_with_float
+    assert_kind_of(BigDecimal, BigDecimal.new("3").remainder(1.5))
+  end
+
+  def test_remainder_with_rational
+    assert_kind_of(BigDecimal, BigDecimal.new("3").remainder(1.quo(3)))
   end
 
   def test_divmod
@@ -1086,7 +1131,7 @@ class TestBigDecimal < Test::Unit::TestCase
     assert_equal(BigDecimal::SIGN_NEGATIVE_ZERO, BigDecimal.new("-1E-1" + "0" * 10000).sign)
   end
 
-  def test_gc
+  def test_split_under_gc_stress
     bug3258 = '[ruby-dev:41213]'
     stress, GC.stress = GC.stress, true
     10.upto(20) do |i|
@@ -1095,6 +1140,21 @@ class TestBigDecimal < Test::Unit::TestCase
     end
   ensure
     GC.stress = stress
+  end
+
+  def test_coerce_under_gc_stress
+    expect = ":too_long_to_embed_as_string can't be coerced into BigDecimal"
+    under_gc_stress do
+      b = BigDecimal.new("1")
+      10.times do
+        begin
+          b.coerce(:too_long_to_embed_as_string)
+        rescue => e
+          assert_instance_of TypeError, e
+          assert_equal expect, e.message
+        end
+      end
+    end
   end
 
   def test_INFINITY
@@ -1155,6 +1215,20 @@ class TestBigDecimal < Test::Unit::TestCase
     assert_in_epsilon(Math.exp(40), BigMath.exp(BigDecimal("40"), n))
     assert_in_epsilon(Math.exp(-n), BigMath.exp(BigDecimal("-20"), n))
     assert_in_epsilon(Math.exp(-40), BigMath.exp(BigDecimal("-40"), n))
+  end
+
+  def test_BigMath_exp_under_gc_stress
+    expect = ":too_long_to_embed_as_string can't be coerced into BigDecimal"
+    under_gc_stress do
+      10.times do
+        begin
+          BigMath.exp(:too_long_to_embed_as_string, 6)
+        rescue => e
+          assert_instance_of ArgumentError, e
+          assert_equal expect, e.message
+        end
+      end
+    end
   end
 
   def test_BigMath_log_with_nil
@@ -1240,5 +1314,37 @@ class TestBigDecimal < Test::Unit::TestCase
   def test_BigMath_log_with_reciprocal_of_42
     assert_in_delta(Math.log(1e-42), BigMath.log(1e-42, 20))
     assert_in_delta(Math.log(1e-42), BigMath.log(BigDecimal("1e-42"), 20))
+  end
+
+  def test_BigMath_log_under_gc_stress
+    expect = ":too_long_to_embed_as_string can't be coerced into BigDecimal"
+    under_gc_stress do
+      10.times do
+        begin
+          BigMath.log(:too_long_to_embed_as_string, 6)
+        rescue => e
+          assert_instance_of ArgumentError, e
+          assert_equal expect, e.message
+        end
+      end
+    end
+  end
+
+  def test_to_d
+    bug6093 = '[ruby-core:42969]'
+    code = "exit(BigDecimal.new('10.0') == 10.0.to_d)"
+    assert_ruby_status(%w[-rbigdecimal -rbigdecimal/util -rmathn -], code, bug6093)
+  end
+
+  def test_to_d
+    bug6093 = '[ruby-core:42969]'
+    code = "exit(BigDecimal.new('10.0') == 10.0.to_d)"
+    assert_ruby_status(%w[-rbigdecimal -rbigdecimal/util -rmathn -], code, bug6093)
+  end
+
+  def test_bug6406
+    assert_in_out_err(%w[-rbigdecimal --disable-gems], <<-EOS, [], [])
+    Thread.current.keys.to_s
+    EOS
   end
 end

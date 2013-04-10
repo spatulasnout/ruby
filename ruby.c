@@ -410,9 +410,21 @@ ruby_init_loadpath_safe(int safe_level)
 #endif
     p = strrchr(libpath, '/');
     if (p) {
+	static const char bindir[] = "/bin";
+#ifdef LIBDIR_BASENAME
+	static const char libdir[] = "/"LIBDIR_BASENAME;
+#else
+	static const char libdir[] = "/lib";
+#endif
+	const ptrdiff_t bindir_len = (ptrdiff_t)sizeof(bindir) - 1;
+	const ptrdiff_t libdir_len = (ptrdiff_t)sizeof(libdir) - 1;
 	*p = 0;
-	if (p - libpath > 3 && !(STRCASECMP(p - 4, "/bin") && strcmp(p - 4, "/lib"))) {
-	    p -= 4;
+	if (p - libpath >= bindir_len && !STRCASECMP(p - bindir_len, bindir)) {
+	    p -= bindir_len;
+	    *p = 0;
+	}
+	else if (p - libpath >= libdir_len && !STRCASECMP(p - libdir_len, libdir)) {
+	    p -= libdir_len;
 	    *p = 0;
 	}
     }
@@ -464,12 +476,15 @@ static void
 add_modules(VALUE *req_list, const char *mod)
 {
     VALUE list = *req_list;
+    VALUE feature;
 
     if (!list) {
 	*req_list = list = rb_ary_new();
 	RBASIC(list)->klass = 0;
     }
-    rb_ary_push(list, rb_obj_freeze(rb_str_new2(mod)));
+    feature = rb_str_new2(mod);
+    RBASIC(feature)->klass = 0;
+    rb_ary_push(list, feature);
 }
 
 static void
@@ -480,6 +495,7 @@ require_libraries(VALUE *req_list)
     ID require;
     rb_thread_t *th = GET_THREAD();
     rb_block_t *prev_base_block = th->base_block;
+    rb_encoding *extenc = rb_default_external_encoding();
     int prev_parse_in_eval = th->parse_in_eval;
     th->base_block = 0;
     th->parse_in_eval = 0;
@@ -488,6 +504,9 @@ require_libraries(VALUE *req_list)
     CONST_ID(require, "require");
     while (list && RARRAY_LEN(list) > 0) {
 	VALUE feature = rb_ary_shift(list);
+	rb_enc_associate(feature, extenc);
+	RBASIC(feature)->klass = rb_cString;
+	OBJ_FREEZE(feature);
 	rb_funcall2(self, require, 1, &feature);
     }
     *req_list = 0;
@@ -1159,7 +1178,7 @@ rb_f_sub(argc, argv)
     int argc;
     VALUE *argv;
 {
-    VALUE str = rb_funcall3(uscore_get(), rb_intern("sub"), argc, argv);
+    VALUE str = rb_funcall_passing_block(uscore_get(), rb_intern("sub"), argc, argv);
     rb_lastline_set(str);
     return str;
 }
@@ -1180,7 +1199,7 @@ rb_f_gsub(argc, argv)
     int argc;
     VALUE *argv;
 {
-    VALUE str = rb_funcall3(uscore_get(), rb_intern("gsub"), argc, argv);
+    VALUE str = rb_funcall_passing_block(uscore_get(), rb_intern("gsub"), argc, argv);
     rb_lastline_set(str);
     return str;
 }
@@ -1198,7 +1217,7 @@ rb_f_gsub(argc, argv)
 static VALUE
 rb_f_chop(void)
 {
-    VALUE str = rb_funcall3(uscore_get(), rb_intern("chop"), 0, 0);
+    VALUE str = rb_funcall_passing_block(uscore_get(), rb_intern("chop"), 0, 0);
     rb_lastline_set(str);
     return str;
 }
@@ -1220,7 +1239,7 @@ rb_f_chomp(argc, argv)
     int argc;
     VALUE *argv;
 {
-    VALUE str = rb_funcall3(uscore_get(), rb_intern("chomp"), argc, argv);
+    VALUE str = rb_funcall_passing_block(uscore_get(), rb_intern("chomp"), argc, argv);
     rb_lastline_set(str);
     return str;
 }
@@ -1807,12 +1826,42 @@ ruby_process_options(int argc, char **argv)
 
 #ifndef HAVE_SETPROCTITLE
     {
-	extern void compat_init_setproctitle(int argc, char *argv[]);
-	compat_init_setproctitle(argc, argv);
+	extern void ruby_init_setproctitle(int argc, char *argv[]);
+	ruby_init_setproctitle(argc, argv);
     }
 #endif
 
     return (void*)(struct RData*)iseq;
+}
+
+static void
+fill_standard_fds(void)
+{
+    int f0, f1, f2, fds[2];
+    struct stat buf;
+    f0 = fstat(0, &buf) == -1 && errno == EBADF;
+    f1 = fstat(1, &buf) == -1 && errno == EBADF;
+    f2 = fstat(2, &buf) == -1 && errno == EBADF;
+    if (f0) {
+        if (pipe(fds) == 0) {
+            close(fds[1]);
+            if (fds[0] != 0) {
+                dup2(fds[0], 0);
+                close(fds[0]);
+            }
+        }
+    }
+    if (f1 || f2) {
+        if (pipe(fds) == 0) {
+            close(fds[0]);
+            if (f1 && fds[1] != 1)
+                dup2(fds[1], 1);
+            if (f2 && fds[1] != 2)
+                dup2(fds[1], 2);
+            if (fds[1] != 1 && fds[1] != 2)
+                close(fds[1]);
+        }
+    }
 }
 
 void
@@ -1827,4 +1876,5 @@ ruby_sysinit(int *argc, char ***argv)
 #if defined(USE_DLN_A_OUT)
     dln_argv0 = origarg.argv[0];
 #endif
+    fill_standard_fds();
 }

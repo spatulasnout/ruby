@@ -43,6 +43,7 @@ class TestGemPlatform < Gem::TestCase
       'sparc-solaris2.9'       => ['sparc',     'solaris',   '2.9'],
       'universal-darwin8'      => ['universal', 'darwin',    '8'],
       'universal-darwin9'      => ['universal', 'darwin',    '9'],
+      'universal-macruby'      => ['universal', 'macruby',   nil],
       'i386-cygwin'            => ['x86',       'cygwin',    nil],
       'i686-darwin'            => ['x86',       'darwin',    nil],
       'i686-darwin8.4.1'       => ['x86',       'darwin',    '8'],
@@ -138,7 +139,7 @@ class TestGemPlatform < Gem::TestCase
   def test_empty
     platform = Gem::Platform.new 'cpu-other_platform1'
     assert_respond_to platform, :empty?
-    assert_equal false, Deprecate.skip_during { platform.empty? }
+    assert_equal false, Gem::Deprecate.skip_during { platform.empty? }
   end
 
   def test_to_s
@@ -245,6 +246,12 @@ class TestGemPlatform < Gem::TestCase
     assert_match 'dotnet',                Gem::Platform.local
     refute_match 'dotnet-2.0',            Gem::Platform.local
     assert_match 'dotnet-4.0',            Gem::Platform.local
+
+    util_set_arch 'universal-macruby-1.0'
+    assert_match 'universal-macruby',      Gem::Platform.local
+    assert_match 'macruby',                Gem::Platform.local
+    refute_match 'universal-macruby-0.10', Gem::Platform.local
+    assert_match 'universal-macruby-1.0',  Gem::Platform.local
 
     util_set_arch 'powerpc-darwin'
     assert_match 'powerpc-darwin', Gem::Platform.local

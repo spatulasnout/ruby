@@ -50,6 +50,15 @@ void vm_analysis_operand(int insn, int n, VALUE op);
 void vm_analysis_register(int reg, int isset);
 void vm_analysis_insn(int insn);
 
+/*
+ * TODO: replace with better interface at the next release.
+ *
+ * these functions are exported just as a workaround for ruby-debug
+ * for the time being.
+ */
+RUBY_FUNC_EXPORTED VALUE rb_vm_make_env_object(rb_thread_t *th, rb_control_frame_t *cfp);
+RUBY_FUNC_EXPORTED int rb_vm_get_sourceline(const rb_control_frame_t *cfp);
+
 void
 rb_vm_change_state(void)
 {
@@ -458,23 +467,73 @@ vm_collect_local_variables_in_heap(rb_thread_t *th, VALUE *dfp, VALUE ary)
     }
 }
 
+static VALUE vm_make_proc_from_block(rb_thread_t *th, rb_block_t *block);
+static VALUE vm_make_env_object(rb_thread_t * th, rb_control_frame_t *cfp, VALUE *blockprocptr);
+
 VALUE
 rb_vm_make_env_object(rb_thread_t * th, rb_control_frame_t *cfp)
 {
+    VALUE blockprocval;
+    return vm_make_env_object(th, cfp, &blockprocval);
+}
+
+static VALUE
+vm_make_env_object(rb_thread_t *th, rb_control_frame_t *cfp, VALUE *blockprocptr)
+{
     VALUE envval;
+    VALUE *lfp;
+    rb_block_t *blockptr;
 
     if (VM_FRAME_TYPE(cfp) == VM_FRAME_MAGIC_FINISH) {
 	/* for method_missing */
 	cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp);
     }
 
+    lfp = cfp->lfp;
+    blockptr = GC_GUARDED_PTR_REF(lfp[0]);
+
+    if (blockptr && !(lfp[0] & 0x02)) {
+	VALUE blockprocval = vm_make_proc_from_block(th, blockptr);
+	rb_proc_t *p;
+	GetProcPtr(blockprocval, p);
+	lfp[0] = GC_GUARDED_PTR(&p->block);
+	*blockprocptr = blockprocval;
+    }
+
     envval = vm_make_env_each(th, cfp, cfp->dfp, cfp->lfp);
+    rb_vm_rewrite_dfp_in_errinfo(th);
 
     if (PROCDEBUG) {
 	check_env_value(envval);
     }
 
     return envval;
+}
+
+void
+rb_vm_rewrite_dfp_in_errinfo(rb_thread_t *th)
+{
+    rb_control_frame_t *cfp = th->cfp;
+    while (!RUBY_VM_CONTROL_FRAME_STACK_OVERFLOW_P(th, cfp)) {
+	/* rewrite dfp in errinfo to point to heap */
+	if (RUBY_VM_NORMAL_ISEQ_P(cfp->iseq) &&
+	    (cfp->iseq->type == ISEQ_TYPE_RESCUE ||
+	     cfp->iseq->type == ISEQ_TYPE_ENSURE)) {
+	    VALUE errinfo = cfp->dfp[-2]; /* #$! */
+	    if (RB_TYPE_P(errinfo, T_NODE)) {
+		VALUE *escape_dfp = GET_THROWOBJ_CATCH_POINT(errinfo);
+		if (! ENV_IN_HEAP_P(th, escape_dfp)) {
+		    VALUE dfpval = *escape_dfp;
+		    if (CLASS_OF(dfpval) == rb_cEnv) {
+			rb_env_t *dfpenv;
+			GetEnvPtr(dfpval, dfpenv);
+			SET_THROWOBJ_CATCH_POINT(errinfo, (VALUE)(dfpenv->env + dfpenv->local_size));
+		    }
+		}
+	    }
+	}
+	cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp);
+    }
 }
 
 void
@@ -509,17 +568,7 @@ rb_vm_make_proc(rb_thread_t *th, const rb_block_t *block, VALUE klass)
 	rb_bug("rb_vm_make_proc: Proc value is already created.");
     }
 
-    if (GC_GUARDED_PTR_REF(cfp->lfp[0])) {
-	rb_proc_t *p;
-
-	blockprocval = vm_make_proc_from_block(
-	    th, (rb_block_t *)GC_GUARDED_PTR_REF(*cfp->lfp));
-
-	GetProcPtr(blockprocval, p);
-	*cfp->lfp = GC_GUARDED_PTR(&p->block);
-    }
-
-    envval = rb_vm_make_env_object(th, cfp);
+    envval = vm_make_env_object(th, cfp, &blockprocval);
 
     if (PROCDEBUG) {
 	check_env_value(envval);
@@ -963,7 +1012,7 @@ rb_vm_jump_tag_but_local_jump(int state, VALUE val)
 {
     if (val != Qnil) {
 	VALUE exc = rb_vm_make_jump_tag_but_local_jump(state, val);
-	rb_exc_raise(exc);
+	if (!NIL_P(exc)) rb_exc_raise(exc);
     }
     JUMP_TAG(state);
 }
@@ -1321,6 +1370,7 @@ vm_exec(rb_thread_t *th)
 			    *th->cfp->sp++ = (GET_THROWOBJ_VAL(err));
 #endif
 			}
+			th->state = 0;
 			th->errinfo = Qnil;
 			goto vm_loop_start;
 		    }
@@ -1375,10 +1425,10 @@ vm_exec(rb_thread_t *th)
 
 	    switch (VM_FRAME_TYPE(th->cfp)) {
 	      case VM_FRAME_MAGIC_METHOD:
-		EXEC_EVENT_HOOK(th, RUBY_EVENT_RETURN, th->cfp->self, 0, 0);
+		EXEC_EVENT_HOOK_AND_POP_FRAME(th, RUBY_EVENT_RETURN, th->cfp->self, 0, 0);
 		break;
 	      case VM_FRAME_MAGIC_CLASS:
-		EXEC_EVENT_HOOK(th, RUBY_EVENT_END, th->cfp->self, 0, 0);
+		EXEC_EVENT_HOOK_AND_POP_FRAME(th, RUBY_EVENT_END, th->cfp->self, 0, 0);
 		break;
 	    }
 
@@ -1576,6 +1626,7 @@ ruby_vm_destruct(rb_vm_t *vm)
 	rb_gc_force_recycle(vm->self);
 	vm->main_thread = 0;
 	if (th) {
+	    rb_fiber_reset_root_local_storage(th->self);
 	    thread_free(th);
 	}
 	if (vm->living_threads) {
@@ -1761,7 +1812,7 @@ thread_free(void *ptr)
 	else {
 #ifdef USE_SIGALTSTACK
 	    if (th->altstack) {
-		xfree(th->altstack);
+		free(th->altstack);
 	    }
 #endif
 	    ruby_xfree(ptr);
@@ -1792,8 +1843,8 @@ thread_memsize(const void *ptr)
     }
 }
 
-#define thread_data_type ruby_thread_data_type
-const rb_data_type_t ruby_thread_data_type = {
+#define thread_data_type ruby_threadptr_data_type
+const rb_data_type_t ruby_threadptr_data_type = {
     "VM/thread",
     {
 	rb_thread_mark,
@@ -1834,7 +1885,8 @@ th_init(rb_thread_t *th, VALUE self)
 
     /* allocate thread stack */
 #ifdef USE_SIGALTSTACK
-    th->altstack = xmalloc(ALT_STACK_SIZE);
+    /* altstack of main thread is reallocated in another place */
+    th->altstack = malloc(ALT_STACK_SIZE);
 #endif
     th->stack_size = RUBY_VM_THREAD_STACK_SIZE;
     th->stack = thread_recycle_stack(th->stack_size);

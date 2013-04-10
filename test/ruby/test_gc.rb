@@ -1,5 +1,7 @@
 require 'test/unit'
 
+require_relative "envutil"
+
 class TestGc < Test::Unit::TestCase
   class S
     def initialize(a)
@@ -77,5 +79,37 @@ class TestGc < Test::Unit::TestCase
     end
   ensure
     GC.stress = prev_stress
+  end
+
+  def test_gc_parameter
+    env = {
+      "RUBY_GC_MALLOC_LIMIT" => "60000000",
+      "RUBY_HEAP_MIN_SLOTS" => "100000"
+    }
+    assert_normal_exit("exit", "[ruby-core:39777]", :child_env => env)
+
+    env = {
+      "RUBYOPT" => "",
+      "RUBY_HEAP_MIN_SLOTS" => "100000"
+    }
+    assert_in_out_err([env, "-e", "exit"], "", [], [], "[ruby-core:39795]")
+    assert_in_out_err([env, "-W0", "-e", "exit"], "", [], [], "[ruby-core:39795]")
+    assert_in_out_err([env, "-W1", "-e", "exit"], "", [], [], "[ruby-core:39795]")
+    assert_in_out_err([env, "-w", "-e", "exit"], "", [], /heap_min_slots=100000/, "[ruby-core:39795]")
+  end
+
+  def test_profiler_enabled
+    GC::Profiler.enable
+    assert_equal(true, GC::Profiler.enabled?)
+    GC::Profiler.disable
+    assert_equal(false, GC::Profiler.enabled?)
+  ensure
+    GC::Profiler.disable
+  end
+
+  def test_finalizing_main_thread
+    assert_in_out_err(%w[--disable-gems], <<-EOS, ["\"finalize\""], [], "[ruby-dev:46647]")
+      ObjectSpace.define_finalizer(Thread.main) { p 'finalize' }
+    EOS
   end
 end

@@ -83,6 +83,10 @@ class TestRipper::ScannerEvents < Test::Unit::TestCase
                   [[1, 1], :on_tstring_content, "foo\n\xe3\x80\xa0"],
                   [[2, 3], :on_tstring_end, "'"]],
                  Ripper.lex("'foo\n\xe3\x80\xa0'")
+    assert_equal [[[1, 0], :on_tstring_beg, "'"],
+                  [[1, 1], :on_tstring_content, "\u3042\n\u3044"],
+                  [[2, 3], :on_tstring_end, "'"]],
+                 Ripper.lex("'\u3042\n\u3044'")
   end
 
   def test_location
@@ -653,6 +657,13 @@ class TestRipper::ScannerEvents < Test::Unit::TestCase
                  scan('tstring_content', "<<EOS\nhere\ndoc \nEOS \n")
     assert_equal ["heredoc\n\tEOS \n"],
                  scan('tstring_content', "<<-EOS\nheredoc\n\tEOS \n")
+    bug7255 = '[ruby-core:48703]'
+    assert_equal ["there\n""heredoc", "\n"],
+                 scan('tstring_content', "<<""EOS\n""there\n""heredoc\#{foo}\nEOS"),
+                 bug7255
+    assert_equal ["there\n""heredoc", "\n"],
+                 scan('tstring_content', "<<""EOS\n""there\n""heredoc\#@foo\nEOS"),
+                 bug7255
   end
 
   def test_heredoc_end

@@ -123,6 +123,7 @@ class TestMethod < Test::Unit::TestCase
     def o.foo; end
     assert_nothing_raised { RubyVM::InstructionSequence.disasm(o.method(:foo)) }
     assert_nothing_raised { RubyVM::InstructionSequence.disasm("x".method(:upcase)) }
+    assert_nothing_raised { RubyVM::InstructionSequence.disasm(method(:to_s).to_proc) }
   end
 
   def test_new
@@ -458,5 +459,17 @@ class TestMethod < Test::Unit::TestCase
     assert_nothing_raised { v.instance_eval { mv1 } }
     assert_nothing_raised { v.instance_eval { mv2 } }
     assert_nothing_raised { v.instance_eval { mv3 } }
+  end
+
+  def test_bound_method_entry
+    bug6171 = '[ruby-core:43383]'
+    assert_ruby_status([], <<-EOC, bug6171)
+      class Bug6171
+        def initialize(target)
+          define_singleton_method(:reverse, target.method(:reverse).to_proc)
+        end
+      end
+      1000.times {p = Bug6171.new('test'); 10000.times {p.reverse}}
+      EOC
   end
 end

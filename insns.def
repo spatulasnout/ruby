@@ -79,7 +79,7 @@ setlocal
  */
 DEFINE_INSN
 getspecial
-(VALUE key, rb_num_t type)
+(rb_num_t key, rb_num_t type)
 ()
 (VALUE val)
 {
@@ -93,7 +93,7 @@ getspecial
  */
 DEFINE_INSN
 setspecial
-(VALUE key)
+(rb_num_t key)
 (VALUE obj)
 ()
 {
@@ -392,9 +392,9 @@ concatstrings
 (...)
 (VALUE val) // inc += 1 - num;
 {
-    rb_num_t i = num;
+    rb_num_t i = num - 1;
 
-    val = rb_str_new(0, 0);
+    val = rb_str_resurrect(TOPN(i));
     while (i-- > 0) {
 	const VALUE v = TOPN(i);
 	rb_str_append(val, v);
@@ -533,6 +533,9 @@ splatarray
     if (NIL_P(tmp)) {
 	tmp = rb_ary_new3(1, ary);
     }
+    else if (RTEST(flag)) {
+	tmp = rb_ary_dup(tmp);
+    }
     obj = tmp;
 }
 
@@ -628,7 +631,7 @@ pop
 (VALUE val)
 ()
 {
-    val = val;
+    (void)val;
     /* none */
 }
 
@@ -773,11 +776,14 @@ defined
 	}
 	break;
       case DEFINED_CVAR:
-	klass = vm_get_cbase(GET_ISEQ(), GET_LFP(), GET_DFP());
+	{
+	NODE *cref = vm_get_cref(GET_ISEQ(), GET_LFP(), GET_DFP());
+	klass = vm_get_cvar_base(cref);
 	if (rb_cvar_defined(klass, SYM2ID(obj))) {
 	    expr_type = "class variable";
 	}
 	break;
+	}
       case DEFINED_CONST:
 	klass = v;
 	if (vm_get_ev_const(th, GET_ISEQ(), klass, SYM2ID(obj), 1)) {
@@ -906,9 +912,9 @@ defineclass
 
 	/* find klass */
 	rb_autoload_load(cbase, id);
-	if (rb_const_defined_at(cbase, id)) {
+	if ((klass = vm_search_const_defined_class(cbase, id)) != 0) {
 	    /* already exist */
-	    klass = define_type == 0 ? rb_public_const_get(cbase, id) : rb_const_get_at(cbase, id);
+	    klass = define_type == 0 ? rb_public_const_get_at(klass, id) : rb_const_get_at(klass, id);
 	    if (TYPE(klass) != T_CLASS) {
 		rb_raise(rb_eTypeError, "%s is not a class", rb_id2name(id));
 	    }
@@ -944,8 +950,8 @@ defineclass
 	vm_check_if_namespace(cbase);
 
 	/* find klass */
-	if (rb_const_defined_at(cbase, id)) {
-	    klass = define_type == 2 ? rb_public_const_get(cbase, id) : rb_const_get_at(cbase, id);
+	if ((klass = vm_search_const_defined_class(cbase, id)) != 0) {
+	    klass = define_type == 2 ? rb_public_const_get_at(klass, id) : rb_const_get_at(klass, id);
 	    /* already exist */
 	    if (TYPE(klass) != T_MODULE) {
 		rb_raise(rb_eTypeError, "%s is not a module", rb_id2name(id));
@@ -1006,7 +1012,7 @@ send
     ID id = op_id;
 
     /* get receiver */
-    recv = (flag & VM_CALL_FCALL_BIT) ? GET_SELF() : TOPN(num);
+    recv = TOPN(num);
     klass = CLASS_OF(recv);
     me = vm_method_search(id, klass, ic);
     CALL_METHOD(num, blockptr, flag, id, me, recv);
@@ -1608,23 +1614,7 @@ opt_mod
 	else if (HEAP_CLASS_OF(recv) == rb_cFloat &&
 		 HEAP_CLASS_OF(obj) == rb_cFloat &&
 		 BASIC_OP_UNREDEFINED_P(BOP_MOD)) {
-	    double x = RFLOAT_VALUE(recv);
-	    double y = RFLOAT_VALUE(obj);
-	    double div, mod;
-
-	    {
-		double z;
-
-		modf(x / y, &z);
-		mod = x - z * y;
-	    }
-
-	    div = (x - mod) / y;
-	    if (y * mod < 0) {
-		mod += y;
-		div -= 1.0;
-	    }
-	    val = DBL2NUM(mod);
+	    val = DBL2NUM(ruby_float_mod(RFLOAT_VALUE(recv), RFLOAT_VALUE(obj)));
 	}
 	else {
 	    goto INSN_LABEL(normal_dispatch);

@@ -358,11 +358,13 @@ bsock_getsockname(VALUE sock)
 {
     struct sockaddr_storage buf;
     socklen_t len = (socklen_t)sizeof buf;
+    socklen_t len0 = len;
     rb_io_t *fptr;
 
     GetOpenFile(sock, fptr);
     if (getsockname(fptr->fd, (struct sockaddr*)&buf, &len) < 0)
 	rb_sys_fail("getsockname(2)");
+    if (len0 < len) len = len0;
     return rb_str_new((char*)&buf, len);
 }
 
@@ -387,11 +389,13 @@ bsock_getpeername(VALUE sock)
 {
     struct sockaddr_storage buf;
     socklen_t len = (socklen_t)sizeof buf;
+    socklen_t len0 = len;
     rb_io_t *fptr;
 
     GetOpenFile(sock, fptr);
     if (getpeername(fptr->fd, (struct sockaddr*)&buf, &len) < 0)
 	rb_sys_fail("getpeername(2)");
+    if (len0 < len) len = len0;
     return rb_str_new((char*)&buf, len);
 }
 
@@ -475,11 +479,13 @@ bsock_local_address(VALUE sock)
 {
     struct sockaddr_storage buf;
     socklen_t len = (socklen_t)sizeof buf;
+    socklen_t len0 = len;
     rb_io_t *fptr;
 
     GetOpenFile(sock, fptr);
     if (getsockname(fptr->fd, (struct sockaddr*)&buf, &len) < 0)
 	rb_sys_fail("getsockname(2)");
+    if (len0 < len) len = len0;
     return rsock_fd_socket_addrinfo(fptr->fd, (struct sockaddr *)&buf, len);
 }
 
@@ -507,11 +513,13 @@ bsock_remote_address(VALUE sock)
 {
     struct sockaddr_storage buf;
     socklen_t len = (socklen_t)sizeof buf;
+    socklen_t len0 = len;
     rb_io_t *fptr;
 
     GetOpenFile(sock, fptr);
     if (getpeername(fptr->fd, (struct sockaddr*)&buf, &len) < 0)
 	rb_sys_fail("getpeername(2)");
+    if (len0 < len) len = len0;
     return rsock_fd_socket_addrinfo(fptr->fd, (struct sockaddr *)&buf, len);
 }
 
@@ -732,12 +740,14 @@ bsock_do_not_rev_lookup_set(VALUE self, VALUE val)
     return val;
 }
 
-/*
- * BasicSocket is the super class for the all socket classes.
- */
 void
 rsock_init_basicsocket(void)
 {
+    /*
+     * Document-class: BasicSocket < IO
+     *
+     * BasicSocket is the super class for all the Socket classes.
+     */
     rb_cBasicSocket = rb_define_class("BasicSocket", rb_cIO);
     rb_undef_method(rb_cBasicSocket, "initialize");
 
