@@ -27,6 +27,10 @@
 #include <strings.h>
 #endif
 
+#if defined(HAVE_SYS_TIME_H)
+#include <sys/time.h>
+#endif
+
 #include "timev.h"
 
 static ID id_divmod, id_mul, id_submicro, id_nano_num, id_nano_den, id_offset;
@@ -679,7 +683,9 @@ num_exact(VALUE v)
 
       default:
         if ((tmp = rb_check_funcall(v, rb_intern("to_r"), 0, NULL)) != Qundef) {
-            if (rb_respond_to(v, rb_intern("to_str"))) goto typeerror;
+            /* test to_int method availability to reject non-Numeric
+             * objects such as String, Time, etc which have to_r method. */
+            if (!rb_respond_to(v, rb_intern("to_int"))) goto typeerror;
             v = tmp;
             break;
         }
@@ -1820,7 +1826,10 @@ struct time_object {
      (tobj)->vtm.utc_offset = (off), \
      (tobj)->vtm.zone = NULL)
 
-#define TIME_COPY_GMT(tobj1, tobj2) ((tobj1)->gmt = (tobj2)->gmt)
+#define TIME_COPY_GMT(tobj1, tobj2) \
+    ((tobj1)->gmt = (tobj2)->gmt, \
+     (tobj1)->vtm.utc_offset = (tobj2)->vtm.utc_offset, \
+     (tobj1)->vtm.zone = (tobj2)->vtm.zone)
 
 static VALUE time_get_tm(VALUE, struct time_object *);
 #define MAKE_TM(time, tobj) \

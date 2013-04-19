@@ -258,6 +258,22 @@ VALUE rb_ull2inum(unsigned LONG_LONG);
 # define SSIZET2NUM(v) INT2NUM(v)
 #endif
 
+#ifndef SIZE_MAX
+# if SIZEOF_SIZE_T > SIZEOF_LONG && defined(HAVE_LONG_LONG)
+#   define SIZE_MAX ULLONG_MAX
+#   define SIZE_MIN ULLONG_MIN
+# elif SIZEOF_SIZE_T == SIZEOF_LONG
+#   define SIZE_MAX ULONG_MAX
+#   define SIZE_MIN ULONG_MIN
+# elif SIZEOF_SIZE_T == SIZEOF_INT
+#   define SIZE_MAX UINT_MAX
+#   define SIZE_MIN UINT_MIN
+# else
+#   define SIZE_MAX USHRT_MAX
+#   define SIZE_MIN USHRT_MIN
+# endif
+#endif
+
 #ifndef SSIZE_MAX
 # if SIZEOF_SIZE_T > SIZEOF_LONG && defined(HAVE_LONG_LONG)
 #   define SSIZE_MAX LLONG_MAX
@@ -319,7 +335,7 @@ rb_long2int(long n) {rb_long2int_internal(n, i); return i;}
 
 #define FIX2LONG(x) (long)RSHIFT((SIGNED_VALUE)(x),1)
 #define FIX2ULONG(x) ((((VALUE)(x))>>1)&LONG_MAX)
-#define FIXNUM_P(f) (((SIGNED_VALUE)(f))&FIXNUM_FLAG)
+#define FIXNUM_P(f) (((int)(SIGNED_VALUE)(f))&FIXNUM_FLAG)
 #define POSFIXABLE(f) ((f) < FIXNUM_MAX+1)
 #define NEGFIXABLE(f) ((f) >= FIXNUM_MIN)
 #define FIXABLE(f) (POSFIXABLE(f) && NEGFIXABLE(f))
@@ -1157,13 +1173,18 @@ PRINTF_ARGS(NORETURN(void rb_fatal(const char*, ...)), 1, 2);
 PRINTF_ARGS(NORETURN(void rb_bug(const char*, ...)), 1, 2);
 NORETURN(void rb_bug_errno(const char*, int));
 NORETURN(void rb_sys_fail(const char*));
+NORETURN(void rb_sys_fail_str(VALUE));
 NORETURN(void rb_mod_sys_fail(VALUE, const char*));
+NORETURN(void rb_mod_sys_fail_str(VALUE, VALUE));
 NORETURN(void rb_iter_break(void));
 NORETURN(void rb_exit(int));
 NORETURN(void rb_notimplement(void));
 VALUE rb_syserr_new(int, const char *);
+VALUE rb_syserr_new_str(int n, VALUE arg);
 NORETURN(void rb_syserr_fail(int, const char*));
+NORETURN(void rb_syserr_fail_str(int, VALUE));
 NORETURN(void rb_mod_syserr_fail(VALUE, int, const char*));
+NORETURN(void rb_mod_syserr_fail_str(VALUE, int, VALUE));
 
 /* reports if `-W' specified */
 PRINTF_ARGS(void rb_warning(const char*, ...), 1, 2);

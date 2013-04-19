@@ -24,6 +24,9 @@
 #elif HAVE_SYS_FCNTL_H
 #include <sys/fcntl.h>
 #endif
+#if defined(HAVE_SYS_TIME_H)
+#include <sys/time.h>
+#endif
 
 static void native_mutex_lock(pthread_mutex_t *lock);
 static void native_mutex_unlock(pthread_mutex_t *lock);
@@ -35,6 +38,7 @@ static void native_cond_broadcast(rb_thread_cond_t *cond);
 static void native_cond_wait(rb_thread_cond_t *cond, pthread_mutex_t *mutex);
 static void native_cond_initialize(rb_thread_cond_t *cond, int flags);
 static void native_cond_destroy(rb_thread_cond_t *cond);
+static pthread_t timer_thread_id;
 
 #define RB_CONDATTR_CLOCK_MONOTONIC 1
 
@@ -109,16 +113,13 @@ gvl_yield(rb_vm_t *vm, rb_thread_t *th)
 	goto acquire;
     }
 
-    vm->gvl.wait_yield = 1;
-
-    if (vm->gvl.waiting > 0)
-	vm->gvl.need_yield = 1;
-
-    if (vm->gvl.need_yield) {
+    if (vm->gvl.waiting > 0) {
 	/* Wait until another thread task take GVL. */
-	while (vm->gvl.need_yield) {
+	vm->gvl.need_yield = 1;
+	vm->gvl.wait_yield = 1;
+	while (vm->gvl.need_yield)
 	    native_cond_wait(&vm->gvl.switch_cond, &vm->gvl.lock);
-	}
+	vm->gvl.wait_yield = 0;
     }
     else {
 	native_mutex_unlock(&vm->gvl.lock);
@@ -126,7 +127,6 @@ gvl_yield(rb_vm_t *vm, rb_thread_t *th)
 	native_mutex_lock(&vm->gvl.lock);
     }
 
-    vm->gvl.wait_yield = 0;
     native_cond_broadcast(&vm->gvl.switch_wait_cond);
   acquire:
     gvl_acquire_common(vm);
@@ -143,6 +143,7 @@ gvl_init(rb_vm_t *vm)
     vm->gvl.acquired = 0;
     vm->gvl.waiting = 0;
     vm->gvl.need_yield = 0;
+    vm->gvl.wait_yield = 0;
 }
 
 static void
@@ -251,6 +252,7 @@ native_cond_initialize(rb_thread_cond_t *cond, int flags)
 #endif
 
     r = pthread_cond_init(&cond->cond, &attr);
+    pthread_condattr_destroy(&attr);
     if (r != 0) {
 	rb_bug_errno("pthread_cond_init", r);
     }
@@ -480,41 +482,38 @@ get_stack(void **addr, size_t *size)
 {
 #define CHECK_ERR(expr)				\
     {int err = (expr); if (err) return err;}
-#if defined HAVE_PTHREAD_GETATTR_NP || defined HAVE_PTHREAD_ATTR_GET_NP || \
-    (defined HAVE_PTHREAD_GET_STACKADDR_NP && defined HAVE_PTHREAD_GET_STACKSIZE_NP)
+#ifdef HAVE_PTHREAD_GETATTR_NP /* Linux */
     pthread_attr_t attr;
     size_t guard = 0;
-
-# ifdef HAVE_PTHREAD_GETATTR_NP /* Linux */
     STACK_GROW_DIR_DETECTION;
     CHECK_ERR(pthread_getattr_np(pthread_self(), &attr));
-#   ifdef HAVE_PTHREAD_ATTR_GETSTACK
+# ifdef HAVE_PTHREAD_ATTR_GETSTACK
     CHECK_ERR(pthread_attr_getstack(&attr, addr, size));
     STACK_DIR_UPPER((void)0, (void)(*addr = (char *)*addr + *size));
-#   else
+# else
     CHECK_ERR(pthread_attr_getstackaddr(&attr, addr));
     CHECK_ERR(pthread_attr_getstacksize(&attr, size));
-#   endif
-# elif defined HAVE_PTHREAD_ATTR_GET_NP /* FreeBSD, DragonFly BSD, NetBSD */
-    CHECK_ERR(pthread_attr_init(&attr));
-    CHECK_ERR(pthread_attr_get_np(pthread_self(), &attr));
-#   ifdef HAVE_PTHREAD_ATTR_GETSTACK
-    CHECK_ERR(pthread_attr_getstack(&attr, addr, size));
-    STACK_DIR_UPPER((void)0, (void)(*addr = (char *)*addr + *size));
-#   else
-    CHECK_ERR(pthread_attr_getstackaddr(&attr, addr));
-    CHECK_ERR(pthread_attr_getstacksize(&attr, size));
-    STACK_DIR_UPPER((void)0, (void)(*addr = (char *)*addr + *size));
-#   endif
-# else /* MacOS X */
-    pthread_t th = pthread_self();
-    *addr = pthread_get_stackaddr_np(th);
-    *size = pthread_get_stacksize_np(th);
-    CHECK_ERR(pthread_attr_init(&attr));
 # endif
     CHECK_ERR(pthread_attr_getguardsize(&attr, &guard));
     *size -= guard;
     pthread_attr_destroy(&attr);
+#elif defined HAVE_PTHREAD_ATTR_GET_NP /* FreeBSD, DragonFly BSD, NetBSD */
+    pthread_attr_t attr;
+    CHECK_ERR(pthread_attr_init(&attr));
+    CHECK_ERR(pthread_attr_get_np(pthread_self(), &attr));
+# ifdef HAVE_PTHREAD_ATTR_GETSTACK
+    CHECK_ERR(pthread_attr_getstack(&attr, addr, size));
+    STACK_DIR_UPPER((void)0, (void)(*addr = (char *)*addr + *size));
+# else
+    CHECK_ERR(pthread_attr_getstackaddr(&attr, addr));
+    CHECK_ERR(pthread_attr_getstacksize(&attr, size));
+    STACK_DIR_UPPER((void)0, (void)(*addr = (char *)*addr + *size));
+# endif
+    pthread_attr_destroy(&attr);
+#elif (defined HAVE_PTHREAD_GET_STACKADDR_NP && defined HAVE_PTHREAD_GET_STACKSIZE_NP) /* MacOS X */
+    pthread_t th = pthread_self();
+    *addr = pthread_get_stackaddr_np(th);
+    *size = pthread_get_stacksize_np(th);
 #elif defined HAVE_THR_STKSEGMENT || defined HAVE_PTHREAD_STACKSEG_NP
     stack_t stk;
 # if defined HAVE_THR_STKSEGMENT /* Solaris */
@@ -584,16 +583,18 @@ ruby_init_stack(volatile VALUE *addr
     {
 	size_t size = 0;
 	size_t space = 0;
-#if defined(HAVE_PTHREAD_ATTR_GET_NP)
-	void* addr;
-	get_stack(&addr, &size);
+#if defined(STACKADDR_AVAILABLE)
+	void* stackaddr;
+	STACK_GROW_DIR_DETECTION;
+	get_stack(&stackaddr, &size);
+	space = STACK_DIR_UPPER((char *)addr - (char *)stackaddr, (char *)stackaddr - (char *)addr);
 #elif defined(HAVE_GETRLIMIT)
 	struct rlimit rlim;
 	if (getrlimit(RLIMIT_STACK, &rlim) == 0) {
 	    size = (size_t)rlim.rlim_cur;
 	}
-#endif
 	space = size > 5 * 1024 * 1024 ? 1024 * 1024 : size / 5;
+#endif
 	native_main_thread.stack_maxsize = size - space;
     }
 }
@@ -1013,10 +1014,12 @@ ubf_select(void *ptr)
 {
     rb_thread_t *th = (rb_thread_t *)ptr;
     add_signal_thread_list(th);
+    if (pthread_self() != timer_thread_id)
+	rb_thread_wakeup_timer_thread(); /* activate timer thread */
     ubf_select_each(th);
 }
 
-static int
+static void
 ping_signal_thread_list(void) {
     if (signal_thread_list_anchor.next) {
 	FGLOCK(&signal_thread_list_lock, {
@@ -1028,20 +1031,25 @@ ping_signal_thread_list(void) {
 		list = list->next;
 	    }
 	});
+    }
+}
+
+static int
+check_signal_thread_list(void)
+{
+    if (signal_thread_list_anchor.next)
 	return 1;
-    }
-    else {
+    else
 	return 0;
-    }
 }
 #else /* USE_SIGNAL_THREAD_LIST */
 static void add_signal_thread_list(rb_thread_t *th) { }
 static void remove_signal_thread_list(rb_thread_t *th) { }
 #define ubf_select 0
-static int ping_signal_thread_list(void) { return 0; }
+static void ping_signal_thread_list(void) { return; }
+static int check_signal_thread_list(void) { return 0; }
 #endif /* USE_SIGNAL_THREAD_LIST */
 
-static pthread_t timer_thread_id;
 static int timer_thread_pipe[2] = {-1, -1};
 static int timer_thread_pipe_owner_process;
 
@@ -1084,7 +1092,7 @@ consume_communication_pipe(void)
 {
 #define CCP_READ_BUFF_SIZE 1024
     /* buffer can be shared because no one refers to them. */
-    static char buff[CCP_READ_BUFF_SIZE]; 
+    static char buff[CCP_READ_BUFF_SIZE];
     ssize_t result;
 
   retry:
@@ -1129,8 +1137,9 @@ thread_timer(void *p)
 	int need_polling;
 
 	/* timer function */
-	need_polling = ping_signal_thread_list();
+	ping_signal_thread_list();
 	timer_thread_function(0);
+	need_polling = check_signal_thread_list();
 
 	if (TT_DEBUG) WRITE_CONST(2, "tick\n");
 
@@ -1143,11 +1152,11 @@ thread_timer(void *p)
 	    timeout.tv_usec = TIME_QUANTUM_USEC;
 
 	    /* polling (TIME_QUANTUM_USEC usec) */
-	    result = select(timer_thread_pipe[0] + 1, &rfds, 0, 0, &timeout); 
+	    result = select(timer_thread_pipe[0] + 1, &rfds, 0, 0, &timeout);
 	}
 	else {
 	    /* wait (infinite) */
-	    result = select(timer_thread_pipe[0] + 1, &rfds, 0, 0, 0); 
+	    result = select(timer_thread_pipe[0] + 1, &rfds, 0, 0, 0);
 	}
 
 	if (result == 0) {
@@ -1241,6 +1250,7 @@ rb_thread_create_timer_thread(void)
 	    fprintf(stderr, "[FATAL] Failed to create timer thread (errno: %d)\n", err);
 	    exit(EXIT_FAILURE);
 	}
+	pthread_attr_destroy(&attr);
     }
 
     rb_disable_interrupt(); /* only timer thread recieve signal */
@@ -1304,7 +1314,7 @@ ruby_stack_overflowed_p(const rb_thread_t *th, const void *addr)
     }
     size /= 5;
     if (size > water_mark) size = water_mark;
-    if (STACK_DIR_UPPER(1, 0)) {
+    if (IS_STACK_DIR_UPPER()) {
 	if (size > ~(size_t)base+1) size = ~(size_t)base+1;
 	if (addr > base && addr <= (void *)((char *)base + size)) return 1;
     }

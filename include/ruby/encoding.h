@@ -211,6 +211,12 @@ void rb_enc_set_default_external(VALUE encoding);
 void rb_enc_set_default_internal(VALUE encoding);
 VALUE rb_locale_charmap(VALUE klass);
 long rb_memsearch(const void*,long,const void*,long,rb_encoding*);
+char *rb_enc_path_next(const char *,const char *,rb_encoding*);
+char *rb_enc_path_skip_prefix(const char *,const char *,rb_encoding*);
+char *rb_enc_path_last_separator(const char *,const char *,rb_encoding*);
+char *rb_enc_path_end(const char *,const char *,rb_encoding*);
+const char *ruby_enc_find_basename(const char *name, long *baselen, long *alllen, rb_encoding *enc);
+const char *ruby_enc_find_extname(const char *name, long *len, rb_encoding *enc);
 
 RUBY_EXTERN VALUE rb_cEncoding;
 #define ENC_DUMMY_FLAG (1<<24)
@@ -305,6 +311,8 @@ void rb_econv_binmode(rb_econv_t *ec);
 
 #define ECONV_DECORATOR_MASK                    0x0000ff00
 #define ECONV_NEWLINE_DECORATOR_MASK            0x00003f00
+#define ECONV_NEWLINE_DECORATOR_READ_MASK       0x00000f00
+#define ECONV_NEWLINE_DECORATOR_WRITE_MASK      0x00003000
 
 #define ECONV_UNIVERSAL_NEWLINE_DECORATOR       0x00000100
 #define ECONV_CRLF_NEWLINE_DECORATOR            0x00001000
@@ -316,7 +324,7 @@ void rb_econv_binmode(rb_econv_t *ec);
 #define ECONV_XML_ATTR_QUOTE_DECORATOR          0x00100000
 
 #if defined(RUBY_TEST_CRLF_ENVIRONMENT) || defined(_WIN32)
-#define ECONV_DEFAULT_NEWLINE_DECORATOR ECONV_UNIVERSAL_NEWLINE_DECORATOR
+#define ECONV_DEFAULT_NEWLINE_DECORATOR ECONV_CRLF_NEWLINE_DECORATOR
 #else
 #define ECONV_DEFAULT_NEWLINE_DECORATOR 0
 #endif

@@ -579,7 +579,7 @@ onig_number_of_names(regex_t* reg)
   NameTable* t = (NameTable* )reg->name_table;
 
   if (IS_NOT_NULL(t))
-    return t->num_entries;
+    return (int)t->num_entries;
   else
     return 0;
 }
@@ -1744,13 +1744,18 @@ add_code_range_to_buf0(BBuf** pbuf, ScanEnv* env, OnigCodePoint from, OnigCodePo
     else
       bound = x;
   }
+  /* data[(low-1)*2+1] << from <= data[low*2]
+   * data[(high-1)*2+1] <= to << data[high*2]
+   */
 
   inc_n = low + 1 - high;
   if (n + inc_n > ONIG_MAX_MULTI_BYTE_RANGES_NUM)
     return ONIGERR_TOO_MANY_MULTI_BYTE_RANGES;
 
   if (inc_n != 1) {
-    if (checkdup && to >= data[low*2]) CC_DUP_WARN(env);
+    if (checkdup && from <= data[low*2+1]
+	&& (data[low*2] <= from  || data[low*2+1] <= to))
+	CC_DUP_WARN(env);
     if (from > data[low*2])
       from = data[low*2];
     if (to < data[(high - 1)*2 + 1])
@@ -4486,7 +4491,7 @@ parse_char_class(Node** np, OnigToken* tok, UChar** src, UChar* end,
 
 	if (IS_SYNTAX_BV(env->syntax, ONIG_SYN_ALLOW_DOUBLE_RANGE_OP_IN_CC)) {
 	  CC_ESC_WARN(env, (UChar* )"-");
-	  goto sb_char;   /* [0-9-a] is allowed as [0-9\-a] */
+	  goto range_end_val; /* [0-9-a] is allowed as [0-9\-a] */
 	}
 	r = ONIGERR_UNMATCHED_RANGE_SPECIFIER_IN_CHAR_CLASS;
 	goto err;

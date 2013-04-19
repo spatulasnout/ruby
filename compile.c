@@ -208,7 +208,7 @@ r_value(VALUE value)
   ADD_SEND_R((seq), (line), (id), (argc), (VALUE)Qfalse, (VALUE)INT2FIX(0))
 
 #define ADD_CALL_RECEIVER(seq, line) \
-  ADD_INSN((seq), (line), putnil)
+  ADD_INSN((seq), (line), putself)
 
 #define ADD_CALL(seq, line, id, argc) \
   ADD_SEND_R((seq), (line), (id), (argc), (VALUE)Qfalse, (VALUE)INT2FIX(VM_CALL_FCALL_BIT))
@@ -238,6 +238,9 @@ r_value(VALUE value)
 #define ADD_LABEL(seq, label) \
   ADD_ELEM((seq), (LINK_ELEMENT *) (label))
 
+#define APPEND_LABEL(seq, before, label) \
+  APPEND_ELEM((seq), (before), (LINK_ELEMENT *) (label))
+
 #define ADD_ADJUST(seq, line, label) \
   ADD_ELEM((seq), (LINK_ELEMENT *) new_adjust_body(iseq, (label), (line)))
 
@@ -248,7 +251,7 @@ r_value(VALUE value)
     (rb_ary_push(iseq->compile_data->catch_table_ary,		\
 		 rb_ary_new3(5, (type),				\
 			     (VALUE)(ls) | 1, (VALUE)(le) | 1,	\
-			     (iseqv), (VALUE)(lc) | 1)))
+			     (VALUE)(iseqv), (VALUE)(lc) | 1)))
 
 /* compile node */
 #define COMPILE(anchor, desc, node) \
@@ -392,8 +395,23 @@ ADD_ELEM(ISEQ_ARG_DECLARE LINK_ANCHOR *anchor, LINK_ELEMENT *elem)
     anchor->last = elem;
     verify_list("add", anchor);
 }
+
+/*
+ * elem1, before, elem2 => elem1, before, elem, elem2
+ */
+static void
+APPEND_ELEM(ISEQ_ARG_DECLARE LINK_ANCHOR *anchor, LINK_ELEMENT *before, LINK_ELEMENT *elem)
+{
+    elem->prev = before;
+    elem->next = before->next;
+    elem->next->prev = elem;
+    before->next = elem;
+    if (before == anchor->last) anchor->last = elem;
+    verify_list("add", anchor);
+}
 #if CPDEBUG < 0
 #define ADD_ELEM(anchor, elem) ADD_ELEM(iseq, (anchor), (elem))
+#define APPEND_ELEM(anchor, before, elem) ADD_ELEM(iseq, (anchor), (before), (elem))
 #endif
 
 static int
@@ -2600,6 +2618,7 @@ compile_cpath(LINK_ANCHOR *ret, rb_iseq_t *iseq, NODE *cpath)
     }
 }
 
+#define defined_expr defined_expr0
 static int
 defined_expr(rb_iseq_t *iseq, LINK_ANCHOR *ret,
 	     NODE *node, LABEL **lfinish, VALUE needstr)
@@ -2721,21 +2740,9 @@ defined_expr(rb_iseq_t *iseq, LINK_ANCHOR *ret,
 	    ADD_INSNL(ret, nd_line(node), branchunless, lfinish[1]);
 	}
 	if (!self) {
-	    LABEL *lstart = NEW_LABEL(nd_line(node));
-	    LABEL *lend = NEW_LABEL(nd_line(node));
-	    VALUE rescue = NEW_CHILD_ISEQVAL(NEW_NIL(),
-					     rb_str_concat(rb_str_new2
-							   ("defined guard in "),
-							   iseq->name),
-					     ISEQ_TYPE_DEFINED_GUARD, 0);
-
 	    defined_expr(iseq, ret, node->nd_recv, lfinish, Qfalse);
 	    ADD_INSNL(ret, nd_line(node), branchunless, lfinish[1]);
-
-	    ADD_LABEL(ret, lstart);
 	    COMPILE(ret, "defined/recv", node->nd_recv);
-	    ADD_LABEL(ret, lend);
-	    ADD_CATCH_ENTRY(CATCH_TYPE_RESCUE, lstart, lend, rescue, lfinish[1]);
 	    ADD_INSN3(ret, nd_line(node), defined, INT2FIX(DEFINED_METHOD),
 		      ID2SYM(node->nd_mid), needstr);
 	}
@@ -2798,6 +2805,29 @@ defined_expr(rb_iseq_t *iseq, LINK_ANCHOR *ret,
 	return 1;
     }
     return 0;
+}
+#undef defined_expr
+
+static int
+defined_expr(rb_iseq_t *iseq, LINK_ANCHOR *ret,
+	     NODE *node, LABEL **lfinish, VALUE needstr)
+{
+    LINK_ELEMENT *lcur = ret->last;
+    int done = defined_expr0(iseq, ret, node, lfinish, needstr);
+    if (lfinish[1]) {
+	int line = nd_line(node);
+	LABEL *lstart = NEW_LABEL(line);
+	LABEL *lend = NEW_LABEL(line);
+	VALUE rescue = NEW_CHILD_ISEQVAL(NEW_NIL(),
+					 rb_str_concat(rb_str_new2
+						       ("defined guard in "),
+						       iseq->name),
+					 ISEQ_TYPE_DEFINED_GUARD, 0);
+	APPEND_LABEL(ret, lcur, lstart);
+	ADD_LABEL(ret, lend);
+	ADD_CATCH_ENTRY(CATCH_TYPE_RESCUE, lstart, lend, rescue, lfinish[1]);
+    }
+    return done;
 }
 
 #define BUFSIZE 0x100
@@ -4599,7 +4629,7 @@ iseq_compile_each(rb_iseq_t *iseq, LINK_ANCHOR *ret, NODE * node, int poped)
       }
       case NODE_SPLAT:{
 	COMPILE(ret, "splat", node->nd_head);
-	ADD_INSN1(ret, nd_line(node), splatarray, Qfalse);
+	ADD_INSN1(ret, nd_line(node), splatarray, Qtrue);
 
 	if (poped) {
 	    ADD_INSN(ret, nd_line(node), pop);
@@ -4814,12 +4844,13 @@ iseq_compile_each(rb_iseq_t *iseq, LINK_ANCHOR *ret, NODE * node, int poped)
 	LABEL *lend = NEW_LABEL(nd_line(node));
 	LABEL *lfin = NEW_LABEL(nd_line(node));
 	LABEL *ltrue = NEW_LABEL(nd_line(node));
-	VALUE key = rb_sprintf("flipflag/%s-%p-%d",
-			       RSTRING_PTR(iseq->name), (void *)iseq,
-			       iseq->compile_data->flip_cnt++);
+	rb_iseq_t *local_iseq = iseq->local_iseq;
+	rb_num_t cnt;
+	VALUE key;
 
-	hide_obj(key);
-	iseq_add_mark_object_compile_time(iseq, key);
+	cnt = local_iseq->flip_cnt++ + DEFAULT_SPECIAL_VAR_COUNT;
+	key = INT2FIX(cnt);
+
 	ADD_INSN2(ret, nd_line(node), getspecial, key, INT2FIX(0));
 	ADD_INSNL(ret, nd_line(node), branchif, lend);
 
@@ -5022,7 +5053,7 @@ iseq_compile_each(rb_iseq_t *iseq, LINK_ANCHOR *ret, NODE * node, int poped)
 	/* compile same as lambda{...} */
 	VALUE block = NEW_CHILD_ISEQVAL(node->nd_body, make_name_for_block(iseq), ISEQ_TYPE_BLOCK, nd_line(node));
 	VALUE argc = INT2FIX(0);
-	ADD_CALL_RECEIVER(ret, nd_line(node));
+	ADD_INSN1(ret, nd_line(node), putspecialobject, INT2FIX(VM_SPECIAL_OBJECT_VMCORE));
 	ADD_CALL_WITH_BLOCK(ret, nd_line(node), ID2SYM(idLambda), argc, block);
 
 	if (poped) {
