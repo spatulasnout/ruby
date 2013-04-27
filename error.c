@@ -569,7 +569,6 @@ exc_to_s(VALUE exc)
 
     if (NIL_P(mesg)) return rb_class_name(CLASS_OF(exc));
     r = rb_String(mesg);
-    OBJ_INFECT(r, exc);
     return r;
 }
 
@@ -853,11 +852,7 @@ name_err_to_s(VALUE exc)
 
     if (NIL_P(mesg)) return rb_class_name(CLASS_OF(exc));
     StringValue(str);
-    if (str != mesg) {
-	rb_iv_set(exc, "mesg", mesg = str);
-    }
-    OBJ_INFECT(mesg, exc);
-    return mesg;
+    return str;
 }
 
 /*
@@ -955,6 +950,7 @@ name_err_mesg_to_str(VALUE obj)
     else {
 	const char *desc = 0;
 	VALUE d = 0, args[NAME_ERR_MESG_COUNT];
+	int state = 0;
 
 	obj = ptr[1];
 	switch (TYPE(obj)) {
@@ -968,7 +964,9 @@ name_err_mesg_to_str(VALUE obj)
 	    desc = "false";
 	    break;
 	  default:
-	    d = rb_protect(rb_inspect, obj, 0);
+	    d = rb_protect(rb_inspect, obj, &state);
+	    if (state)
+		rb_set_errinfo(Qnil);
 	    if (NIL_P(d) || RSTRING_LEN(d) > 65) {
 		d = rb_any_to_s(obj);
 	    }
@@ -985,7 +983,6 @@ name_err_mesg_to_str(VALUE obj)
 	args[2] = d;
 	mesg = rb_f_sprintf(NAME_ERR_MESG_COUNT, args);
     }
-    OBJ_INFECT(mesg, obj);
     return mesg;
 }
 
@@ -1125,15 +1122,13 @@ syserr_initialize(int argc, VALUE *argv, VALUE self)
     else err = "unknown error";
     if (!NIL_P(mesg)) {
 	rb_encoding *le = rb_locale_encoding();
-	VALUE str = mesg;
+	VALUE str = StringValue(mesg);
+	rb_encoding *me = rb_enc_get(mesg);
 
-	StringValue(str);
 	mesg = rb_sprintf("%s - %.*s", err,
 			  (int)RSTRING_LEN(str), RSTRING_PTR(str));
-	if (le == rb_usascii_encoding()) {
-	    rb_encoding *me = rb_enc_get(mesg);
-	    if (le != me && rb_enc_asciicompat(me))
-		le = me;
+	if (le != me && rb_enc_asciicompat(me)) {
+	    le = me;
 	}/* else assume err is non ASCII string. */
 	OBJ_INFECT(mesg, str);
 	rb_enc_associate(mesg, le);
@@ -1632,11 +1627,31 @@ make_errno_exc(const char *mesg)
     return rb_syserr_new(n, mesg);
 }
 
+static VALUE
+make_errno_exc_str(VALUE mesg)
+{
+    int n = errno;
+
+    errno = 0;
+    if (!mesg) mesg = Qnil;
+    if (n == 0) {
+	const char *s = !NIL_P(mesg) ? RSTRING_PTR(mesg) : "";
+	rb_bug("rb_sys_fail_str(%s) - errno == 0", s);
+    }
+    return rb_syserr_new_str(n, mesg);
+}
+
 VALUE
 rb_syserr_new(int n, const char *mesg)
 {
     VALUE arg;
     arg = mesg ? rb_str_new2(mesg) : Qnil;
+    return rb_syserr_new_str(n, arg);
+}
+
+VALUE
+rb_syserr_new_str(int n, VALUE arg)
+{
     return rb_class_new_instance(1, &arg, get_syserr(n));
 }
 
@@ -1647,9 +1662,21 @@ rb_syserr_fail(int e, const char *mesg)
 }
 
 void
+rb_syserr_fail_str(int e, VALUE mesg)
+{
+    rb_exc_raise(rb_syserr_new_str(e, mesg));
+}
+
+void
 rb_sys_fail(const char *mesg)
 {
     rb_exc_raise(make_errno_exc(mesg));
+}
+
+void
+rb_sys_fail_str(VALUE mesg)
+{
+    rb_exc_raise(make_errno_exc_str(mesg));
 }
 
 void
@@ -1661,9 +1688,25 @@ rb_mod_sys_fail(VALUE mod, const char *mesg)
 }
 
 void
+rb_mod_sys_fail_str(VALUE mod, VALUE mesg)
+{
+    VALUE exc = make_errno_exc_str(mesg);
+    rb_extend_object(exc, mod);
+    rb_exc_raise(exc);
+}
+
+void
 rb_mod_syserr_fail(VALUE mod, int e, const char *mesg)
 {
     VALUE exc = rb_syserr_new(e, mesg);
+    rb_extend_object(exc, mod);
+    rb_exc_raise(exc);
+}
+
+void
+rb_mod_syserr_fail_str(VALUE mod, int e, VALUE mesg)
+{
+    VALUE exc = rb_syserr_new_str(e, mesg);
     rb_extend_object(exc, mod);
     rb_exc_raise(exc);
 }

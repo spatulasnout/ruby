@@ -725,6 +725,7 @@ static VALUE
 str_new_empty(VALUE str)
 {
     VALUE v = rb_str_new5(str, 0, 0);
+    rb_enc_copy(v, str);
     OBJ_INFECT(v, str);
     return v;
 }
@@ -1328,11 +1329,19 @@ rb_str_modify_expand(VALUE str, long expand)
     if (expand < 0) {
 	rb_raise(rb_eArgError, "negative expanding string size");
     }
-    if (!str_independent(str) ||
-	(expand > 0 &&
-	 (!STR_EMBED_P(str) ||
-	  RSTRING_LEN(str) + expand > RSTRING_EMBED_LEN_MAX))) {
+    if (!str_independent(str)) {
 	str_make_independent_expand(str, expand);
+    }
+    else if (expand > 0) {
+	long len = RSTRING_LEN(str);
+	long capa = len + expand;
+	if (!STR_EMBED_P(str)) {
+	    REALLOC_N(RSTRING(str)->as.heap.ptr, char, capa+1);
+	    RSTRING(str)->as.heap.aux.capa = capa;
+	}
+	else if (capa > RSTRING_EMBED_LEN_MAX) {
+	    str_make_independent_expand(str, expand);
+	}
     }
     ENC_CODERANGE_CLEAR(str);
 }
@@ -1900,15 +1909,12 @@ rb_enc_cr_str_buf_cat(VALUE str, const char *ptr, long len,
     int str_encindex = ENCODING_GET(str);
     int res_encindex;
     int str_cr, res_cr;
-    int ptr_a8 = ptr_encindex == 0;
 
     str_cr = ENC_CODERANGE(str);
 
     if (str_encindex == ptr_encindex) {
-        if (str_cr == ENC_CODERANGE_UNKNOWN ||
-            (ptr_a8 && str_cr != ENC_CODERANGE_7BIT)) {
+        if (str_cr == ENC_CODERANGE_UNKNOWN)
             ptr_cr = ENC_CODERANGE_UNKNOWN;
-        }
         else if (ptr_cr == ENC_CODERANGE_UNKNOWN) {
             ptr_cr = coderange_scan(ptr, len, rb_enc_from_index(ptr_encindex));
         }
@@ -2073,10 +2079,11 @@ rb_str_append(VALUE str, VALUE str2)
 VALUE
 rb_str_concat(VALUE str1, VALUE str2)
 {
-    unsigned int lc;
+    unsigned int code;
+    rb_encoding *enc = STR_ENC_GET(str1);
 
     if (FIXNUM_P(str2) || TYPE(str2) == T_BIGNUM) {
-	if (rb_num_to_uint(str2, &lc) == 0) {
+	if (rb_num_to_uint(str2, &code) == 0) {
 	}
 	else if (FIXNUM_P(str2)) {
 	    rb_raise(rb_eRangeError, "%ld out of char range", FIX2LONG(str2));
@@ -2088,22 +2095,47 @@ rb_str_concat(VALUE str1, VALUE str2)
     else {
 	return rb_str_append(str1, str2);
     }
-    {
-	rb_encoding *enc = STR_ENC_GET(str1);
+
+    if (enc == rb_usascii_encoding()) {
+	/* US-ASCII automatically extended to ASCII-8BIT */
+	char buf[1];
+	buf[0] = (char)code;
+	if (code > 0xFF) {
+	    rb_raise(rb_eRangeError, "%u out of char range", code);
+	}
+	rb_str_cat(str1, buf, 1);
+	if (code > 127) {
+	    rb_enc_associate(str1, rb_ascii8bit_encoding());
+	    ENC_CODERANGE_SET(str1, ENC_CODERANGE_VALID);
+	}
+    }
+    else {
 	long pos = RSTRING_LEN(str1);
 	int cr = ENC_CODERANGE(str1);
 	int len;
+	char *buf;
 
-	if ((len = rb_enc_codelen(lc, enc)) <= 0) {
-	    rb_raise(rb_eRangeError, "%u invalid char", lc);
+	switch (len = rb_enc_codelen(code, enc)) {
+	  case ONIGERR_INVALID_CODE_POINT_VALUE:
+	    rb_raise(rb_eRangeError, "invalid codepoint 0x%X in %s", code, rb_enc_name(enc));
+	    break;
+	  case ONIGERR_TOO_BIG_WIDE_CHAR_VALUE:
+	  case 0:
+	    rb_raise(rb_eRangeError, "%u out of char range", code);
+	    break;
+	}
+	buf = ALLOCA_N(char, len + 1);
+	rb_enc_mbcput(code, buf, enc);
+	if (rb_enc_precise_mbclen(buf, buf + len + 1, enc) != len) {
+	    rb_raise(rb_eRangeError, "invalid codepoint 0x%X in %s", code, rb_enc_name(enc));
 	}
 	rb_str_resize(str1, pos+len);
-	rb_enc_mbcput(lc, RSTRING_PTR(str1)+pos, enc);
-	if (cr == ENC_CODERANGE_7BIT && lc > 127)
+	strncpy(RSTRING_PTR(str1) + pos, buf, len);
+	if (cr == ENC_CODERANGE_7BIT && code > 127)
 	    cr = ENC_CODERANGE_VALID;
 	ENC_CODERANGE_SET(str1, cr);
-	return str1;
     }
+    return str1;
 }
 
 /*
@@ -2124,12 +2156,6 @@ rb_str_prepend(VALUE str, VALUE str2)
     StringValue(str);
     rb_str_update(str, 0L, 0L, str2);
     return str;
-}
-
-st_index_t
-rb_memhash(const void *ptr, long len)
-{
-    return st_hash(ptr, len, rb_hash_start((st_index_t)len));
 }
 
 st_index_t
@@ -3163,12 +3189,11 @@ rb_str_aref(VALUE str, VALUE indx)
  *  Element Reference---If passed a single <code>Fixnum</code>, returns a
  *  substring of one character at that position. If passed two <code>Fixnum</code>
  *  objects, returns a substring starting at the offset given by the first, and
- *  a length given by the second. If given a range, a substring containing
- *  characters at offsets given by the range is returned. In all three cases, if
- *  an offset is negative, it is counted from the end of <i>str</i>. Returns
- *  <code>nil</code> if the initial offset falls outside the string, the length
- *  is negative, or the beginning of the range is greater than the end of the
- *  string.
+ *  with a length given by the second. If passed a range, its beginning and end
+ *  are interpreted as offsets delimiting the substring to be returned. In all
+ *  three cases, if an offset is negative, it is counted from the end of <i>str</i>.
+ *  Returns <code>nil</code> if the initial offset falls outside the string or
+ *  the length is negative.
  *
  *  If a <code>Regexp</code> is supplied, the matching portion of <i>str</i> is
  *  returned. If a numeric or name parameter follows the regular expression, that
@@ -3179,12 +3204,13 @@ rb_str_aref(VALUE str, VALUE indx)
  *
  *     a = "hello there"
  *     a[1]                   #=> "e"
- *     a[1,3]                 #=> "ell"
- *     a[1..3]                #=> "ell"
- *     a[-3,2]                #=> "er"
+ *     a[2, 3]                #=> "llo"
+ *     a[2..3]                #=> "ll"
+ *     a[-3, 2]               #=> "er"
+ *     a[7..-2]               #=> "her"
  *     a[-4..-2]              #=> "her"
- *     a[12..-1]              #=> nil
  *     a[-2..-4]              #=> ""
+ *     a[12..-1]              #=> nil
  *     a[/[aeiou](.)\1/]      #=> "ell"
  *     a[/[aeiou](.)\1/, 0]   #=> "ell"
  *     a[/[aeiou](.)\1/, 1]   #=> "l"
@@ -4016,9 +4042,28 @@ str_byte_substr(VALUE str, long beg, long len)
     }
     else {
 	str2 = rb_str_new5(str, p, len);
-	rb_enc_cr_str_copy_for_substr(str2, str);
-	OBJ_INFECT(str2, str);
     }
+
+    str_enc_copy(str2, str);
+
+    if (RSTRING_LEN(str2) == 0) {
+	if (!rb_enc_asciicompat(STR_ENC_GET(str)))
+	    ENC_CODERANGE_SET(str2, ENC_CODERANGE_VALID);
+	else
+	    ENC_CODERANGE_SET(str2, ENC_CODERANGE_7BIT);
+    }
+    else {
+	switch (ENC_CODERANGE(str)) {
+	  case ENC_CODERANGE_7BIT:
+	    ENC_CODERANGE_SET(str2, ENC_CODERANGE_7BIT);
+	    break;
+	  default:
+	    ENC_CODERANGE_SET(str2, ENC_CODERANGE_UNKNOWN);
+	    break;
+	}
+    }
+
+    OBJ_INFECT(str2, str);
 
     return str2;
 }
@@ -5233,14 +5278,14 @@ rb_str_tr_bang(VALUE str, VALUE src, VALUE repl)
  *  call-seq:
  *     str.tr(from_str, to_str)   => new_str
  *
- *  Returns a copy of <i>str</i> with the characters in <i>from_str</i> 
- *  replaced by the corresponding characters in <i>to_str</i>. If 
+ *  Returns a copy of <i>str</i> with the characters in <i>from_str</i>
+ *  replaced by the corresponding characters in <i>to_str</i>. If
  *  <i>to_str</i> is shorter than <i>from_str</i>, it is padded with its last
  *  character in order to maintain the correspondence.
  *
  *     "hello".tr('el', 'ip')      #=> "hippo"
  *     "hello".tr('aeiou', '*')    #=> "h*ll*"
- * 
+ *
  *  Both strings may use the c1-c2 notation to denote ranges of characters,
  *  and <i>from_str</i> may start with a <code>^</code>, which denotes all
  *  characters except those listed.
@@ -6750,6 +6795,7 @@ rb_str_crypt(VALUE str, VALUE salt)
     extern char *crypt(const char *, const char *);
     VALUE result;
     const char *s, *saltp;
+    char *res;
 #ifdef BROKEN_CRYPT
     char salt_8bit_clean[3];
 #endif
@@ -6769,7 +6815,11 @@ rb_str_crypt(VALUE str, VALUE salt)
 	saltp = salt_8bit_clean;
     }
 #endif
-    result = rb_str_new2(crypt(s, saltp));
+    res = crypt(s, saltp);
+    if (!res) {
+	rb_sys_fail("crypt");
+    }
+    result = rb_str_new2(res);
     OBJ_INFECT(result, str);
     OBJ_INFECT(result, salt);
     return result;

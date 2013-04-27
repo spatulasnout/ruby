@@ -6,6 +6,7 @@ require 'socket'
 require 'stringio'
 require 'timeout'
 require 'tempfile'
+require 'weakref'
 require_relative 'envutil'
 
 class TestIO < Test::Unit::TestCase
@@ -1306,6 +1307,30 @@ class TestIO < Test::Unit::TestCase
     end
   end
 
+  def test_pos_with_getc
+    bug6179 = '[ruby-core:43497]'
+    t = make_tempfile
+    ["", "t", "b"].each do |mode|
+      open(t.path, "w#{mode}") do |f|
+        f.write "0123456789\n"
+      end
+
+      open(t.path, "r#{mode}") do |f|
+        assert_equal 0, f.pos, "mode=r#{mode}"
+        assert_equal '0', f.getc, "mode=r#{mode}"
+        assert_equal 1, f.pos, "mode=r#{mode}"
+        assert_equal '1', f.getc, "mode=r#{mode}"
+        assert_equal 2, f.pos, "mode=r#{mode}"
+        assert_equal '2', f.getc, "mode=r#{mode}"
+        assert_equal 3, f.pos, "mode=r#{mode}"
+        assert_equal '3', f.getc, "mode=r#{mode}"
+        assert_equal 4, f.pos, "mode=r#{mode}"
+        assert_equal '4', f.getc, "mode=r#{mode}"
+      end
+    end
+  end
+
+
   def test_sysseek
     t = make_tempfile
 
@@ -1382,12 +1407,11 @@ class TestIO < Test::Unit::TestCase
 
   def try_fdopen(fd, autoclose = true, level = 100)
     if level > 0
-      try_fdopen(fd, autoclose, level - 1)
+      f = try_fdopen(fd, autoclose, level - 1)
       GC.start
-      level
+      f
     else
-      IO.for_fd(fd, autoclose: autoclose)
-      nil
+      WeakRef.new(IO.for_fd(fd, autoclose: autoclose))
     end
   end
 
@@ -1395,31 +1419,51 @@ class TestIO < Test::Unit::TestCase
     feature2250 = '[ruby-core:26222]'
     pre = 'ft2250'
 
-    Tempfile.new(pre) do |t|
-      f = IO.for_fd(t.fileno)
-      assert_equal(true, f.autoclose?)
-      f.autoclose = false
-      assert_equal(false, f.autoclose?)
-      f.close
-      assert_nothing_raised(Errno::EBADF) {t.close}
+    t = Tempfile.new(pre)
+    f = IO.for_fd(t.fileno)
+    assert_equal(true, f.autoclose?)
+    f.autoclose = false
+    assert_equal(false, f.autoclose?)
+    f.close
+    assert_nothing_raised(Errno::EBADF, feature2250) {t.close}
 
-      t.open
-      f = IO.for_fd(t.fileno, autoclose: false)
-      assert_equal(false, f.autoclose?)
-      f.autoclose = true
-      assert_equal(true, f.autoclose?)
-      f.close
-      assert_raise(Errno::EBADF) {t.close}
+    t.open
+    f = IO.for_fd(t.fileno, autoclose: false)
+    assert_equal(false, f.autoclose?)
+    f.autoclose = true
+    assert_equal(true, f.autoclose?)
+    f.close
+    assert_raise(Errno::EBADF, feature2250) {t.close}
+  end
+
+  def test_autoclose_true_closed_by_finalizer
+    feature2250 = '[ruby-core:26222]'
+    pre = 'ft2250'
+    t = Tempfile.new(pre)
+    w = try_fdopen(t.fileno)
+    begin
+      w.close
+      begin
+        t.close
+      rescue Errno::EBADF
+      end
+      skip "expect IO object was GC'ed but not recycled yet"
+    rescue WeakRef::RefError
+      assert_raise(Errno::EBADF, feature2250) {t.close}
     end
+  end
 
-    Tempfile.new(pre) do |t|
-      try_fdopen(t.fileno)
-      assert_raise(Errno::EBADF) {t.close}
-    end
-
-    Tempfile.new(pre) do |t|
-      try_fdopen(f.fileno, false)
-      assert_nothing_raised(Errno::EBADF) {t.close}
+  def test_autoclose_false_closed_by_finalizer
+    feature2250 = '[ruby-core:26222]'
+    pre = 'ft2250'
+    t = Tempfile.new(pre)
+    w = try_fdopen(t.fileno, false)
+    begin
+      w.close
+      t.close
+      skip "expect IO object was GC'ed but not recycled yet"
+    rescue WeakRef::RefError
+      assert_nothing_raised(Errno::EBADF, feature2250) {t.close}
     end
   end
 
@@ -1535,6 +1579,16 @@ End
     IO.foreach(t.path, "b", 3) {|x| a << x }
     assert_equal(["foo", "\nb", "ar\n", "b", "az\n"], a)
 
+    bug = '[ruby-dev:31525]'
+    assert_raise(ArgumentError, bug) {IO.foreach}
+
+    a = nil
+    assert_nothing_raised(ArgumentError, bug) {a = IO.foreach(t.path).to_a}
+    assert_equal(["foo\n", "bar\n", "baz\n"], a, bug)
+
+    bug6054 = '[ruby-dev:45267]'
+    e = assert_raise(IOError, bug6054) {IO.foreach(t.path, mode:"w").next}
+    assert_match(/not opened for reading/, e.message, bug6054)
   end
 
   def test_s_readlines
@@ -1745,7 +1799,7 @@ End
       }
     end
   ensure
-    fds.each {|fd| IO.for_fd(fd).close rescue next}
+    GC.start
   end
 
   def test_flush_in_finalizer2
@@ -1897,15 +1951,18 @@ End
 
   def test_open_mode
     feature4742 = "[ruby-core:36338]"
+    bug6055 = '[ruby-dev:45268]'
 
     mkcdtmpdir do
-      refute_nil(f = File.open('symbolic', 'w'))
+      assert_not_nil(f = File.open('symbolic', 'w'))
       f.close
-      refute_nil(f = File.open('numeric',  File::WRONLY|File::TRUNC|File::CREAT))
+      assert_not_nil(f = File.open('numeric',  File::WRONLY|File::TRUNC|File::CREAT))
       f.close
-      refute_nil(f = File.open('hash-symbolic', :mode => 'w'))
+      assert_not_nil(f = File.open('hash-symbolic', :mode => 'w'))
       f.close
-      refute_nil(f = File.open('hash-numeric', :mode => File::WRONLY|File::TRUNC|File::CREAT), feature4742)
+      assert_not_nil(f = File.open('hash-numeric', :mode => File::WRONLY|File::TRUNC|File::CREAT), feature4742)
+      f.close
+      assert_nothing_raised(bug6055) {f = File.open('hash-symbolic', binmode: true)}
       f.close
     end
   end
@@ -1984,5 +2041,110 @@ End
     read_file.close
     write_file.close
     file.close!
+  end
+
+  def test_ioctl_linux
+    return if /linux/ !~ RUBY_PLATFORM
+
+    assert_nothing_raised do
+      File.open('/dev/urandom'){|f1|
+        entropy_count = ""
+        # get entropy count
+        f1.ioctl(0x80045200, entropy_count)
+      }
+    end
+
+    buf = ''
+    assert_nothing_raised do
+      fionread = 0x541B
+      File.open(__FILE__){|f1|
+        f1.ioctl(fionread, buf)
+      }
+    end
+    assert_equal(File.size(__FILE__), buf.unpack('i!')[0])
+  end
+
+  def test_ioctl_linux2
+    return if /linux/ !~ RUBY_PLATFORM
+    return if /^i.?86|^x86_64/ !~ RUBY_PLATFORM
+
+    return unless system('tty', '-s') # stdin is not a terminal
+    File.open('/dev/tty') { |f|
+      tiocgwinsz=0x5413
+      winsize=""
+      assert_nothing_raised {
+        f.ioctl(tiocgwinsz, winsize)
+      }
+    }
+  end
+
+  def test_setpos
+    mkcdtmpdir {
+      File.open("tmp.txt", "w") {|f|
+        f.puts "a"
+        f.puts "bc"
+        f.puts "def"
+      }
+      pos1 = pos2 = pos3 = nil
+      File.open("tmp.txt") {|f|
+        assert_equal("a\n", f.gets)
+        pos1 = f.pos
+        assert_equal("bc\n", f.gets)
+        pos2 = f.pos
+        assert_equal("def\n", f.gets)
+        pos3 = f.pos
+        assert_equal(nil, f.gets)
+      }
+      File.open("tmp.txt") {|f|
+        f.pos = pos1
+        assert_equal("bc\n", f.gets)
+        assert_equal("def\n", f.gets)
+        assert_equal(nil, f.gets)
+      }
+      File.open("tmp.txt") {|f|
+        f.pos = pos2
+        assert_equal("def\n", f.gets)
+        assert_equal(nil, f.gets)
+      }
+      File.open("tmp.txt") {|f|
+        f.pos = pos3
+        assert_equal(nil, f.gets)
+      }
+    }
+  end
+
+  def test_std_fileno
+    assert_equal(0, STDIN.fileno)
+    assert_equal(1, STDOUT.fileno)
+    assert_equal(2, STDERR.fileno)
+    assert_equal(0, $stdin.fileno)
+    assert_equal(1, $stdout.fileno)
+    assert_equal(2, $stderr.fileno)
+  end
+
+  def test_io_select_with_many_files
+    bug8080 = '[ruby-core:53349]'
+
+    assert_normal_exit %q{
+      require "tempfile"
+
+      # try to raise RLIM_NOFILE to >FD_SETSIZE
+      # Unfortunately, ruby export FD_SETSIZE. then we assume it's 1024.
+      fd_setsize = 1024
+
+      begin
+        Process.setrlimit(Process::RLIMIT_NOFILE, fd_setsize+10)
+      rescue =>e
+        # Process::RLIMIT_NOFILE couldn't be raised. skip the test
+        exit 0
+      end
+
+      tempfiles = []
+      (0..fd_setsize+1).map {|i|
+        tempfiles << Tempfile.open("test_io_select_with_many_files")
+      }
+
+      IO.select(tempfiles)
+  }, bug8080
   end
 end

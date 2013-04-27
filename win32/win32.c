@@ -63,7 +63,7 @@
 
 #define TO_SOCKET(x)	_get_osfhandle(x)
 
-static struct ChildRecord *CreateChild(const WCHAR *, const WCHAR *, SECURITY_ATTRIBUTES *, HANDLE, HANDLE, HANDLE);
+static struct ChildRecord *CreateChild(const WCHAR *, const WCHAR *, SECURITY_ATTRIBUTES *, HANDLE, HANDLE, HANDLE, DWORD);
 static int has_redirection(const char *);
 int rb_w32_wait_events(HANDLE *events, int num, DWORD timeout);
 static int rb_w32_open_osfhandle(intptr_t osfhandle, int flags);
@@ -578,12 +578,6 @@ init_env(void)
 typedef BOOL (WINAPI *cancel_io_t)(HANDLE);
 static cancel_io_t cancel_io = NULL;
 
-int
-rb_w32_has_cancel_io(void)
-{
-    return cancel_io != NULL;
-}
-
 static void
 init_func(void)
 {
@@ -674,6 +668,8 @@ rb_w32_sysinit(int *argc, char ***argv)
     _set_invalid_parameter_handler(invalid_parameter);
     _RTC_SetErrorFunc(rtc_error_handler);
     set_pioinfo_extra();
+#else
+    SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
 #endif
 
     get_version();
@@ -1008,10 +1004,9 @@ child_result(struct ChildRecord *child, int mode)
 
 static struct ChildRecord *
 CreateChild(const WCHAR *cmd, const WCHAR *prog, SECURITY_ATTRIBUTES *psa,
-	    HANDLE hInput, HANDLE hOutput, HANDLE hError)
+	    HANDLE hInput, HANDLE hOutput, HANDLE hError, DWORD dwCreationFlags)
 {
     BOOL fRet;
-    DWORD  dwCreationFlags;
     STARTUPINFOW aStartupInfo;
     PROCESS_INFORMATION aProcessInformation;
     SECURITY_ATTRIBUTES sa;
@@ -1058,7 +1053,7 @@ CreateChild(const WCHAR *cmd, const WCHAR *prog, SECURITY_ATTRIBUTES *psa,
 	aStartupInfo.hStdError = GetStdHandle(STD_ERROR_HANDLE);
     }
 
-    dwCreationFlags = (NORMAL_PRIORITY_CLASS);
+    dwCreationFlags |= NORMAL_PRIORITY_CLASS;
 
     if (lstrlenW(cmd) > 32767) {
 	child->pid = 0;		/* release the slot */
@@ -1209,14 +1204,14 @@ rb_w32_spawn(int mode, const char *cmd, const char *prog)
     wshell = shell ? acp_to_wstr(shell, NULL) : NULL;
     if (v2) ALLOCV_END(v2);
 
-    ret = child_result(CreateChild(wcmd, wshell, NULL, NULL, NULL, NULL), mode);
+    ret = child_result(CreateChild(wcmd, wshell, NULL, NULL, NULL, NULL, 0), mode);
     free(wshell);
     free(wcmd);
     return ret;
 }
 
 rb_pid_t
-rb_w32_aspawn(int mode, const char *prog, char *const *argv)
+rb_w32_aspawn_flags(int mode, const char *prog, char *const *argv, DWORD flags)
 {
     int c_switch = 0;
     size_t len;
@@ -1275,12 +1270,19 @@ rb_w32_aspawn(int mode, const char *prog, char *const *argv)
     if (v) ALLOCV_END(v);
     wprog = prog ? acp_to_wstr(prog, NULL) : NULL;
 
-    ret = child_result(CreateChild(wcmd, wprog, NULL, NULL, NULL, NULL), mode);
+    ret = child_result(CreateChild(wcmd, wprog, NULL, NULL, NULL, NULL, flags), mode);
     free(wprog);
     free(wcmd);
     return ret;
 }
 
+rb_pid_t
+rb_w32_aspawn(int mode, const char *prog, char *const *argv)
+{
+    return rb_w32_aspawn_flags(mode, prog, argv, 0);
+}
+
+/* License: Artistic or GPL */
 typedef struct _NtCmdLineElement {
     struct _NtCmdLineElement *next;
     char *str;
@@ -1373,6 +1375,7 @@ has_redirection(const char *cmd)
 	  case '>':
 	  case '<':
 	  case '|':
+	  case '&':
 	  case '\n':
 	    if (!quote)
 		return TRUE;
@@ -2080,6 +2083,15 @@ set_pioinfo_extra(void)
 #define FDEV			0x40	/* file handle refers to device */
 #define FTEXT			0x80	/* file handle is in text mode */
 
+static int is_socket(SOCKET);
+static int is_console(SOCKET);
+
+int
+rb_w32_io_cancelable_p(int fd)
+{
+    return cancel_io != NULL && (is_socket(TO_SOCKET(fd)) || !is_console(TO_SOCKET(fd)));
+}
+
 static int
 rb_w32_open_osfhandle(intptr_t osfhandle, int flags)
 {
@@ -2128,7 +2140,7 @@ init_stdhandle(void)
     int keep = 0;
 #define open_null(fd)						\
     (((nullfd < 0) ?						\
-      (nullfd = open("NUL", O_RDWR|O_BINARY)) : 0),		\
+      (nullfd = open("NUL", O_RDWR)) : 0),		\
      ((nullfd == (fd)) ? (keep = 1) : dup2(nullfd, fd)),	\
      (fd))
 
@@ -2141,14 +2153,8 @@ init_stdhandle(void)
     if (fileno(stdout) < 0) {
 	stdout->_file = open_null(1);
     }
-    else {
-	setmode(fileno(stdout), O_BINARY);
-    }
     if (fileno(stderr) < 0) {
 	stderr->_file = open_null(2);
-    }
-    else {
-	setmode(fileno(stderr), O_BINARY);
     }
     if (nullfd >= 0 && !keep) close(nullfd);
     setvbuf(stderr, NULL, _IONBF, 0);
@@ -2316,25 +2322,10 @@ ioctl(int i, int u, ...)
     return -1;
 }
 
-#undef FD_SET
-
 void
 rb_w32_fdset(int fd, fd_set *set)
 {
-    unsigned int i;
-    SOCKET s = TO_SOCKET(fd);
-
-    for (i = 0; i < set->fd_count; i++) {
-        if (set->fd_array[i] == s) {
-            return;
-        }
-    }
-    if (i == set->fd_count) {
-        if (set->fd_count < FD_SETSIZE) {
-            set->fd_array[i] = s;
-            set->fd_count++;
-        }
-    }
+    FD_SET(fd, set);
 }
 
 #undef FD_CLR
@@ -2718,14 +2709,19 @@ rb_w32_select_with_thread(int nfds, fd_set *rd, fd_set *wr, fd_set *ex,
 		fd_set orig_rd;
 		fd_set orig_wr;
 		fd_set orig_ex;
-		if (rd) orig_rd = *rd;
-		if (wr) orig_wr = *wr;
-		if (ex) orig_ex = *ex;
+
+		FD_ZERO(&orig_rd);
+		FD_ZERO(&orig_wr);
+		FD_ZERO(&orig_ex);
+
+		if (rd) copy_fd(&orig_rd, rd);
+		if (wr) copy_fd(&orig_wr, wr);
+		if (ex) copy_fd(&orig_ex, ex);
 		r = do_select(nfds, rd, wr, ex, &zero);	// polling
 		if (r != 0) break; // signaled or error
-		if (rd) *rd = orig_rd;
-		if (wr) *wr = orig_wr;
-		if (ex) *ex = orig_ex;
+		if (rd) copy_fd(rd, &orig_rd);
+		if (wr) copy_fd(wr, &orig_wr);
+		if (ex) copy_fd(ex, &orig_ex);
 
 		if (timeout) {
 		    struct timeval now;
@@ -3851,7 +3847,13 @@ kill(int pid, int sig)
 
       case SIGINT:
 	RUBY_CRITICAL({
-	    if (!GenerateConsoleCtrlEvent(CTRL_C_EVENT, (DWORD)pid)) {
+	    DWORD ctrlEvent = CTRL_C_EVENT;
+	    if (pid != 0) {
+	        /* CTRL+C signal cannot be generated for process groups.
+		 * Instead, we use CTRL+BREAK signal. */
+	        ctrlEvent = CTRL_BREAK_EVENT;
+	    }
+	    if (!GenerateConsoleCtrlEvent(ctrlEvent, (DWORD)pid)) {
 		if ((err = GetLastError()) == 0)
 		    errno = EPERM;
 		else
@@ -4125,7 +4127,8 @@ isUNCRoot(const WCHAR *path)
 	(dest).st_ctime = (src).st_ctime;	\
     } while (0)
 
-#ifdef __BORLANDC__
+static time_t filetime_to_unixtime(const FILETIME *ft);
+
 #undef fstat
 int
 rb_w32_fstat(int fd, struct stat *st)
@@ -4134,10 +4137,18 @@ rb_w32_fstat(int fd, struct stat *st)
     int ret = fstat(fd, st);
 
     if (ret) return ret;
+#ifdef __BORLANDC__
     st->st_mode &= ~(S_IWGRP | S_IWOTH);
-    if (GetFileInformationByHandle((HANDLE)_get_osfhandle(fd), &info) &&
-	!(info.dwFileAttributes & FILE_ATTRIBUTE_READONLY)) {
-	st->st_mode |= S_IWUSR;
+#endif
+    if (GetFileInformationByHandle((HANDLE)_get_osfhandle(fd), &info)) {
+#ifdef __BORLANDC__
+	if (!(info.dwFileAttributes & FILE_ATTRIBUTE_READONLY)) {
+	    st->st_mode |= S_IWUSR;
+	}
+#endif
+	st->st_atime = filetime_to_unixtime(&info.ftLastAccessTime);
+	st->st_mtime = filetime_to_unixtime(&info.ftLastWriteTime);
+	st->st_ctime = filetime_to_unixtime(&info.ftCreationTime);
     }
     return ret;
 }
@@ -4150,17 +4161,23 @@ rb_w32_fstati64(int fd, struct stati64 *st)
     int ret = fstat(fd, &tmp);
 
     if (ret) return ret;
+#ifdef __BORLANDC__
     tmp.st_mode &= ~(S_IWGRP | S_IWOTH);
+#endif
     COPY_STAT(tmp, *st, +);
     if (GetFileInformationByHandle((HANDLE)_get_osfhandle(fd), &info)) {
+#ifdef __BORLANDC__
 	if (!(info.dwFileAttributes & FILE_ATTRIBUTE_READONLY)) {
 	    st->st_mode |= S_IWUSR;
 	}
+#endif
 	st->st_size = ((__int64)info.nFileSizeHigh << 32) | info.nFileSizeLow;
+	st->st_atime = filetime_to_unixtime(&info.ftLastAccessTime);
+	st->st_mtime = filetime_to_unixtime(&info.ftLastWriteTime);
+	st->st_ctime = filetime_to_unixtime(&info.ftCreationTime);
     }
     return ret;
 }
-#endif
 
 static time_t
 filetime_to_unixtime(const FILETIME *ft)
@@ -4218,7 +4235,14 @@ static int
 check_valid_dir(const WCHAR *path)
 {
     WIN32_FIND_DATAW fd;
-    HANDLE fh = open_dir_handle(path, &fd);
+    HANDLE fh;
+
+    /* GetFileAttributes() determines "..." as directory. */
+    /* We recheck it by FindFirstFile(). */
+    if (wcsstr(path, L"...") == NULL)
+	return 0;
+
+    fh = open_dir_handle(path, &fd);
     if (fh == INVALID_HANDLE_VALUE)
 	return -1;
     FindClose(fh);
@@ -4230,6 +4254,7 @@ winnt_stat(const WCHAR *path, struct stati64 *st)
 {
     HANDLE h;
     WIN32_FIND_DATAW wfd;
+    WIN32_FILE_ATTRIBUTE_DATA wfa;
 
     memset(st, 0, sizeof(*st));
     st->st_nlink = 1;
@@ -4238,27 +4263,43 @@ winnt_stat(const WCHAR *path, struct stati64 *st)
 	errno = ENOENT;
 	return -1;
     }
-    h = FindFirstFileW(path, &wfd);
-    if (h != INVALID_HANDLE_VALUE) {
-	FindClose(h);
-	st->st_mode  = fileattr_to_unixmode(wfd.dwFileAttributes, path);
-	st->st_atime = filetime_to_unixtime(&wfd.ftLastAccessTime);
-	st->st_mtime = filetime_to_unixtime(&wfd.ftLastWriteTime);
-	st->st_ctime = filetime_to_unixtime(&wfd.ftCreationTime);
-	st->st_size = ((__int64)wfd.nFileSizeHigh << 32) | wfd.nFileSizeLow;
+    if (GetFileAttributesExW(path, GetFileExInfoStandard, (void*)&wfa)) {
+	if (wfa.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+	    if (check_valid_dir(path)) return -1;
+	    st->st_size = 0;
+	}
+	else {
+	    st->st_size = ((__int64)wfa.nFileSizeHigh << 32) | wfa.nFileSizeLow;
+	}
+	st->st_mode  = fileattr_to_unixmode(wfa.dwFileAttributes, path);
+	st->st_atime = filetime_to_unixtime(&wfa.ftLastAccessTime);
+	st->st_mtime = filetime_to_unixtime(&wfa.ftLastWriteTime);
+	st->st_ctime = filetime_to_unixtime(&wfa.ftCreationTime);
     }
     else {
-	// If runtime stat(2) is called for network shares, it fails on WinNT.
-	// Because GetDriveType returns 1 for network shares. (Win98 returns 4)
-	DWORD attr = GetFileAttributesW(path);
-	if (attr == (DWORD)-1L) {
+	/* GetFileAttributesEx failed; check why. */
+	int e = GetLastError();
+
+	if ((e == ERROR_FILE_NOT_FOUND) || (e == ERROR_INVALID_NAME)
+	    || (e == ERROR_PATH_NOT_FOUND || (e == ERROR_BAD_NETPATH))) {
+	    errno = map_errno(e);
+	    return -1;
+	}
+
+	/* Fall back to FindFirstFile for ERROR_SHARING_VIOLATION */
+	h = FindFirstFileW(path, &wfd);
+	if (h != INVALID_HANDLE_VALUE) {
+	    FindClose(h);
+	    st->st_mode  = fileattr_to_unixmode(wfd.dwFileAttributes, path);
+	    st->st_atime = filetime_to_unixtime(&wfd.ftLastAccessTime);
+	    st->st_mtime = filetime_to_unixtime(&wfd.ftLastWriteTime);
+	    st->st_ctime = filetime_to_unixtime(&wfd.ftCreationTime);
+	    st->st_size = ((__int64)wfd.nFileSizeHigh << 32) | wfd.nFileSizeLow;
+	}
+	else {
 	    errno = map_errno(GetLastError());
 	    return -1;
 	}
-	if (attr & FILE_ATTRIBUTE_DIRECTORY) {
-	    if (check_valid_dir(path)) return -1;
-	}
-	st->st_mode  = fileattr_to_unixmode(attr, path);
     }
 
     st->st_dev = st->st_rdev = (iswalpha(path[0]) && path[1] == L':') ?
@@ -5175,7 +5216,7 @@ rb_w32_read(int fd, void *buf, size_t size)
     }
 
     ret = 0;
-    isconsole = is_console(_osfhnd(fd));
+    isconsole = is_console(_osfhnd(fd)) && (osver.dwMajorVersion < 6 || (osver.dwMajorVersion == 6 && osver.dwMinorVersion < 2));
     if (isconsole) {
 	DWORD mode;
 	GetConsoleMode((HANDLE)_osfhnd(fd),&mode);
@@ -5315,7 +5356,8 @@ rb_w32_write(int fd, const void *buf, size_t size)
 	return -1;
     }
 
-    if (_osfile(fd) & FTEXT) {
+    if ((_osfile(fd) & FTEXT) &&
+        (!(_osfile(fd) & FPIPE) || fd == fileno(stdout) || fd == fileno(stderr))) {
 	return _write(fd, buf, size);
     }
 
@@ -5449,24 +5491,11 @@ rb_w32_write_console(uintptr_t strarg, int fd)
 static int
 unixtime_to_filetime(time_t time, FILETIME *ft)
 {
-    struct tm *tm;
-    SYSTEMTIME st;
-    FILETIME lt;
+    ULARGE_INTEGER tmp;
 
-    tm = localtime(&time);
-    st.wYear = tm->tm_year + 1900;
-    st.wMonth = tm->tm_mon + 1;
-    st.wDayOfWeek = tm->tm_wday;
-    st.wDay = tm->tm_mday;
-    st.wHour = tm->tm_hour;
-    st.wMinute = tm->tm_min;
-    st.wSecond = tm->tm_sec;
-    st.wMilliseconds = 0;
-    if (!SystemTimeToFileTime(&st, &lt) ||
-	!LocalFileTimeToFileTime(&lt, ft)) {
-	errno = map_errno(GetLastError());
-	return -1;
-    }
+    tmp.QuadPart = ((LONG_LONG)time + (LONG_LONG)((1970-1601)*365.2425) * 24 * 60 * 60) * 10 * 1000 * 1000;
+    ft->dwLowDateTime = tmp.LowPart;
+    ft->dwHighDateTime = tmp.HighPart;
     return 0;
 }
 
@@ -5701,7 +5730,7 @@ rb_w32_uchmod(const char *path, int mode)
     WCHAR *wpath;
     int ret;
 
-    if (!(wpath = filecp_to_wstr(path, NULL)))
+    if (!(wpath = utf8_to_wstr(path, NULL)))
 	return -1;
     ret = _wchmod(wpath, mode);
     free(wpath);
@@ -5815,4 +5844,9 @@ rb_w32_inet_ntop(int af, void *addr, char *numaddr, size_t numaddr_len)
        snprintf(numaddr, numaddr_len, "%s", inet_ntoa(in));
     }
     return numaddr;
+}
+
+char
+rb_w32_fd_is_text(int fd) {
+    return _osfile(fd) & FTEXT;
 }

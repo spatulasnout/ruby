@@ -22,7 +22,7 @@
 #include "vm_opts.h"
 #include "id.h"
 #include "method.h"
-#include "atomic.h"
+#include "ruby_atomic.h"
 
 #if   defined(_WIN32)
 #include "thread_win32.h"
@@ -200,14 +200,14 @@ struct rb_iseq_struct {
      *
      *  argc           = M
      *  arg_rest       = M+N+1 // or -1 if no rest arg
-     *  arg_opts       = N
-     *  arg_opts_tbl   = [ (N entries) ]
+     *  arg_opts       = N+1   // or 0  if no optional arg
+     *  arg_opt_table  = [ (arg_opts entries) ]
      *  arg_post_len   = O // 0 if no post arguments
      *  arg_post_start = M+N+2
      *  arg_block      = M+N + 1 + O + 1 // -1 if no block arg
      *  arg_simple     = 0 if not simple arguments.
      *                 = 1 if no opt, rest, post, block.
-     *                 = 2 if ambiguos block parameter ({|a|}).
+     *                 = 2 if ambiguous block parameter ({|a|}).
      *  arg_size       = argument size.
      */
 
@@ -252,6 +252,7 @@ struct rb_iseq_struct {
 
     /* misc */
     ID defined_method_id;	/* for define_method */
+    rb_num_t flip_cnt;
 
     /* used at compile time */
     struct iseq_compile_data *compile_data;
@@ -651,7 +652,7 @@ VALUE rb_vm_invoke_proc(rb_thread_t *th, rb_proc_t *proc, VALUE self,
 			int argc, const VALUE *argv, const rb_block_t *blockptr);
 VALUE rb_vm_make_proc(rb_thread_t *th, const rb_block_t *block, VALUE klass);
 VALUE rb_vm_make_env_object(rb_thread_t *th, rb_control_frame_t *cfp);
-void rb_vm_rewrite_dfp_in_errinfo(rb_thread_t *th, rb_control_frame_t *cfp);
+void rb_vm_rewrite_dfp_in_errinfo(rb_thread_t *th);
 void rb_vm_inc_const_missing_count(void);
 void rb_vm_gvl_destroy(rb_vm_t *vm);
 VALUE rb_vm_call(rb_thread_t *th, VALUE recv, VALUE id, int argc,
@@ -728,16 +729,22 @@ void rb_thread_lock_destroy(rb_thread_lock_t *);
 
 /* tracer */
 void
-rb_threadptr_exec_event_hooks(rb_thread_t *th, rb_event_flag_t flag, VALUE self, ID id, VALUE klass);
+rb_threadptr_exec_event_hooks(rb_thread_t *th, rb_event_flag_t flag, VALUE self, ID id, VALUE klass, int pop_p);
 
-#define EXEC_EVENT_HOOK(th, flag, self, id, klass) do { \
+#define EXEC_EVENT_HOOK_ORIG(th, flag, self, id, klass, pop_p) do { \
     rb_event_flag_t wait_event__ = (th)->event_flags; \
     if (UNLIKELY(wait_event__)) { \
 	if (wait_event__ & ((flag) | RUBY_EVENT_VM)) { \
-	    rb_threadptr_exec_event_hooks((th), (flag), (self), (id), (klass)); \
+	    rb_threadptr_exec_event_hooks((th), (flag), (self), (id), (klass), (pop_p)); \
 	} \
     } \
 } while (0)
+
+#define EXEC_EVENT_HOOK(th, flag, self, id, klass) \
+  EXEC_EVENT_HOOK_ORIG(th, flag, self, id, klass, 0)
+
+#define EXEC_EVENT_HOOK_AND_POP_FRAME(th, flag, self, id, klass) \
+  EXEC_EVENT_HOOK_ORIG(th, flag, self, id, klass, 1)
 
 #if defined __GNUC__ && __GNUC__ >= 4
 #pragma GCC visibility push(default)

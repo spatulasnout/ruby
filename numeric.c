@@ -814,16 +814,18 @@ flodivmod(double x, double y, double *divp, double *modp)
     double div, mod;
 
     if (y == 0.0) rb_num_zerodiv();
+    if((x == 0.0) || (isinf(y) && !isinf(x)))
+        mod = x;
+    else {
 #ifdef HAVE_FMOD
-    mod = fmod(x, y);
+	mod = fmod(x, y);
 #else
-    {
 	double z;
 
 	modf(x/y, &z);
 	mod = x - z * y;
-    }
 #endif
+    }
     if (isinf(x) && !isinf(y) && !isnan(y))
 	div = x;
     else
@@ -834,6 +836,17 @@ flodivmod(double x, double y, double *divp, double *modp)
     }
     if (modp) *modp = mod;
     if (divp) *divp = div;
+}
+
+/*
+ * Returns the modulo of division of x by y.
+ * An error will be raised if y == 0.
+ */
+
+double ruby_float_mod(double x, double y) {
+    double mod;
+    flodivmod(x, y, 0, &mod);
+    return mod;
 }
 
 
@@ -851,7 +864,7 @@ flodivmod(double x, double y, double *divp, double *modp)
 static VALUE
 flo_mod(VALUE x, VALUE y)
 {
-    double fy, mod;
+    double fy;
 
     switch (TYPE(y)) {
       case T_FIXNUM:
@@ -866,15 +879,14 @@ flo_mod(VALUE x, VALUE y)
       default:
 	return rb_num_coerce_bin(x, y, '%');
     }
-    flodivmod(RFLOAT_VALUE(x), fy, 0, &mod);
-    return DBL2NUM(mod);
+    return DBL2NUM(ruby_float_mod(RFLOAT_VALUE(x), fy));
 }
 
 static VALUE
 dbl2ival(double d)
 {
+    d = round(d);
     if (FIXABLE(d)) {
-	d = round(d);
 	return LONG2FIX((long)d);
     }
     return rb_dbl2big(d);
@@ -1456,6 +1468,48 @@ flo_ceil(VALUE num)
 }
 
 /*
+ * Assumes num is an Integer, ndigits <= 0
+ */
+static VALUE
+int_round_0(VALUE num, int ndigits)
+{
+    VALUE n, f, h, r;
+    long bytes;
+    ID op;
+    /* If 10**N / 2 > num, then return 0 */
+    /* We have log_256(10) > 0.415241 and log_256(1/2) = -0.125, so */
+    bytes = FIXNUM_P(num) ? sizeof(long) : rb_funcall(num, rb_intern("size"), 0);
+    if (-0.415241 * ndigits - 0.125 > bytes ) {
+	return INT2FIX(0);
+    }
+
+    f = int_pow(10, -ndigits);
+    if (FIXNUM_P(num) && FIXNUM_P(f)) {
+	SIGNED_VALUE x = FIX2LONG(num), y = FIX2LONG(f);
+	int neg = x < 0;
+	if (neg) x = -x;
+	x = (x + y / 2) / y * y;
+	if (neg) x = -x;
+	return LONG2NUM(x);
+    }
+    if (TYPE(f) == T_FLOAT) {
+	/* then int_pow overflow */
+	return INT2FIX(0);
+    }
+    h = rb_funcall(f, '/', 1, INT2FIX(2));
+    r = rb_funcall(num, '%', 1, f);
+    n = rb_funcall(num, '-', 1, r);
+    op = RTEST(rb_funcall(num, '<', 1, INT2FIX(0))) ? rb_intern("<=") : '<';
+    if (!RTEST(rb_funcall(r, op, 1, h))) {
+	n = rb_funcall(n, '+', 1, f);
+    }
+    return n;
+}
+
+static VALUE
+flo_truncate(VALUE num);
+
+/*
  *  call-seq:
  *     flt.round([ndigits])  ->  integer or float
  *
@@ -1492,18 +1546,24 @@ flo_round(int argc, VALUE *argv, VALUE num)
     double number, f;
     int ndigits = 0;
     int binexp;
-    long val;
+    enum {float_dig = DBL_DIG+2};
 
     if (argc > 0 && rb_scan_args(argc, argv, "01", &nd) == 1) {
 	ndigits = NUM2INT(nd);
     }
+    if (ndigits < 0) {
+	return int_round_0(flo_truncate(num), ndigits);
+    }
     number  = RFLOAT_VALUE(num);
-    frexp (number , &binexp);
+    if (ndigits == 0) {
+	return dbl2ival(number);
+    }
+    frexp(number, &binexp);
 
 /* Let `exp` be such that `number` is written as:"0.#{digits}e#{exp}",
    i.e. such that  10 ** (exp - 1) <= |number| < 10 ** exp
-   Recall that up to 17 digits can be needed to represent a double,
-   so if ndigits + exp >= 17, the intermediate value (number * 10 ** ndigits)
+   Recall that up to float_dig digits can be needed to represent a double,
+   so if ndigits + exp >= float_dig, the intermediate value (number * 10 ** ndigits)
    will be an integer and thus the result is the original number.
    If ndigits + exp <= 0, the result is 0 or "1e#{exp}", so
    if ndigits + exp < 0, the result is 0.
@@ -1512,46 +1572,20 @@ flo_round(int argc, VALUE *argv, VALUE num)
 	10 ** ((binexp-1)/log_2(10)) <= |number| < 10 ** (binexp/log_2(10))
 	If binexp >= 0, and since log_2(10) = 3.322259:
 	   10 ** (binexp/4 - 1) < |number| < 10 ** (binexp/3)
-	   binexp/4 <= exp <= binexp/3
+	   floor(binexp/4) <= exp <= ceil(binexp/3)
 	If binexp <= 0, swap the /4 and the /3
-	So if ndigits + binexp/(4 or 3) >= 17, the result is number
-	If ndigits + binexp/(3 or 4) < 0 the result is 0
+	So if ndigits + floor(binexp/(4 or 3)) >= float_dig, the result is number
+	If ndigits + ceil(binexp/(3 or 4)) < 0 the result is 0
 */
-    if (isinf(number) || isnan(number)) {
-	/* Do nothing */
+    if (isinf(number) || isnan(number) ||
+	(ndigits >= float_dig - (binexp > 0 ? binexp / 4 : binexp / 3 - 1))) {
+	return num;
     }
-    else if ((long)ndigits * (4 - (binexp > 0)) + binexp < 0) {
-	number = 0;
+    if (ndigits < - (binexp > 0 ? binexp / 3 + 1 : binexp / 4)) {
+	return DBL2NUM(0);
     }
-    else if (((long)ndigits - 17) * (3 + (binexp > 0)) + binexp < 0) {
-	f = pow(10, abs(ndigits));
-	if (ndigits < 0) {
-	    double absnum = fabs(number);
-	    if (absnum < f) return INT2FIX(0);
-	    if (!FIXABLE(number)) {
-		VALUE f10 = int_pow(10, -ndigits);
-		VALUE n10 = f10;
-		if (number < 0) {
-		    f10 = FIXNUM_P(f10) ? fix_uminus(f10) : rb_big_uminus(f10);
-		}
-		num = rb_big_idiv(rb_dbl2big(absnum), n10);
-		return FIXNUM_P(num) ? fix_mul(num, f10) : rb_big_mul(num, f10);
-	    }
-	    number /= f;
-	}
-	else number *= f;
-	number = round(number);
-	if (ndigits < 0) number *= f;
-	else number /= f;
-    }
-
-    if (ndigits > 0) return DBL2NUM(number);
-
-    if (!FIXABLE(number)) {
-	return rb_dbl2big(number);
-    }
-    val = (long)number;
-    return LONG2FIX(val);
+    f = pow(10, ndigits);
+    return DBL2NUM(round(number * f) / f);
 }
 
 /*
@@ -2174,11 +2208,20 @@ rb_enc_uint_chr(unsigned int code, rb_encoding *enc)
 {
     int n;
     VALUE str;
-    if ((n = rb_enc_codelen(code, enc)) <= 0) {
+    switch (n = rb_enc_codelen(code, enc)) {
+      case ONIGERR_INVALID_CODE_POINT_VALUE:
+	rb_raise(rb_eRangeError, "invalid codepoint 0x%X in %s", code, rb_enc_name(enc));
+	break;
+      case ONIGERR_TOO_BIG_WIDE_CHAR_VALUE:
+      case 0:
 	rb_raise(rb_eRangeError, "%u out of char range", code);
+	break;
     }
     str = rb_enc_str_new(0, n, enc);
     rb_enc_mbcput(code, RSTRING_PTR(str), enc);
+    if (rb_enc_precise_mbclen(RSTRING_PTR(str), RSTRING_END(str), enc) != n) {
+	rb_raise(rb_eRangeError, "invalid codepoint 0x%X in %s", code, rb_enc_name(enc));
+    }
     return str;
 }
 
@@ -2617,12 +2660,7 @@ fix_mod(VALUE x, VALUE y)
 	x = rb_int2big(FIX2LONG(x));
 	return rb_big_modulo(x, y);
       case T_FLOAT:
-	{
-	    double mod;
-
-	    flodivmod((double)FIX2LONG(x), RFLOAT_VALUE(y), 0, &mod);
-	    return DBL2NUM(mod);
-	}
+	return DBL2NUM(ruby_float_mod((double)FIX2LONG(x), RFLOAT_VALUE(y)));
       default:
 	return rb_num_coerce_bin(x, y, '%');
     }
@@ -3318,9 +3356,8 @@ int_dotimes(VALUE num)
 static VALUE
 int_round(int argc, VALUE* argv, VALUE num)
 {
-    VALUE n, f, h, r;
+    VALUE n;
     int ndigits;
-    ID op;
 
     if (argc == 0) return num;
     rb_scan_args(argc, argv, "1", &n);
@@ -3331,27 +3368,7 @@ int_round(int argc, VALUE* argv, VALUE num)
     if (ndigits == 0) {
 	return num;
     }
-    ndigits = -ndigits;
-    if (ndigits < 0) {
-	rb_raise(rb_eArgError, "ndigits out of range");
-    }
-    f = int_pow(10, ndigits);
-    if (FIXNUM_P(num) && FIXNUM_P(f)) {
-	SIGNED_VALUE x = FIX2LONG(num), y = FIX2LONG(f);
-	int neg = x < 0;
-	if (neg) x = -x;
-	x = (x + y / 2) / y * y;
-	if (neg) x = -x;
-	return LONG2NUM(x);
-    }
-    h = rb_funcall(f, '/', 1, INT2FIX(2));
-    r = rb_funcall(num, '%', 1, f);
-    n = rb_funcall(num, '-', 1, r);
-    op = RTEST(rb_funcall(num, '<', 1, INT2FIX(0))) ? rb_intern("<=") : '<';
-    if (!RTEST(rb_funcall(r, op, 1, h))) {
-	n = rb_funcall(n, '+', 1, f);
-    }
-    return n;
+    return int_round_0(num, ndigits);
 }
 
 /*

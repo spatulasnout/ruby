@@ -216,6 +216,10 @@ set_relation(rb_iseq_t *iseq, const VALUE parent)
 	GetISeqPtr(parent, piseq);
 	iseq->parent_iseq = piseq;
     }
+
+    if (type == ISEQ_TYPE_MAIN) {
+	iseq->local_iseq = iseq;
+    }
 }
 
 static VALUE
@@ -1313,7 +1317,7 @@ iseq_data_to_ary(rb_iseq_t *iseq)
 	}
 
 	rb_ary_push(body, ary);
-	pos += RARRAY_LEN(ary);
+	pos += RARRAY_LENINT(ary); /* reject too huge data */
     }
 
     st_free_table(labels_table);
@@ -1496,7 +1500,7 @@ rb_iseq_build_for_ruby2cext(
 void
 Init_ISeq(void)
 {
-    /* declare ::VM::InstructionSequence */
+    /* declare ::RubyVM::InstructionSequence */
     rb_cISeq = rb_define_class_under(rb_cRubyVM, "InstructionSequence", rb_cObject);
     rb_define_alloc_func(rb_cISeq, iseq_alloc);
     rb_define_method(rb_cISeq, "inspect", iseq_inspect, 0);

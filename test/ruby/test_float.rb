@@ -195,6 +195,18 @@ class TestFloat < Test::Unit::TestCase
     assert_raise(TypeError) { 2.0.send(:%, nil) }
   end
 
+  def test_modulo3
+    bug6044 = '[ruby-core:42726]'
+    assert_equal(4.2, 4.2.send(:%, Float::INFINITY))
+    assert_equal(4.2, 4.2 % Float::INFINITY)
+    assert_is_minus_zero(-0.0 % 4.2)
+    assert_is_minus_zero(-0.0.send :%, 4.2)
+    assert_raise(ZeroDivisionError) { 4.2.send(:%, 0.0) }
+    assert_raise(ZeroDivisionError) { 4.2 % 0.0 }
+    assert_raise(ZeroDivisionError) { 42.send(:%, 0) }
+    assert_raise(ZeroDivisionError) { 42 % 0 }
+  end
+
   def test_divmod2
     assert_equal([1.0, 0.0], 2.0.divmod(2))
     assert_equal([1.0, 0.0], 2.0.divmod((2**32).coerce(2).first))
@@ -315,7 +327,9 @@ class TestFloat < Test::Unit::TestCase
     assert_raise(FloatDomainError) { inf.ceil }
     assert_raise(FloatDomainError) { inf.round }
     assert_raise(FloatDomainError) { inf.truncate }
+  end
 
+  def test_round_with_precision
     assert_equal(1.100, 1.111.round(1))
     assert_equal(1.110, 1.111.round(2))
     assert_equal(11110.0, 11111.1.round(-1))
@@ -323,6 +337,17 @@ class TestFloat < Test::Unit::TestCase
 
     assert_equal(10**300, 1.1e300.round(-300))
     assert_equal(-10**300, -1.1e300.round(-300))
+    assert_equal(1.0e-300, 1.1e-300.round(300))
+    assert_equal(-1.0e-300, -1.1e-300.round(300))
+
+    bug5227 = '[ruby-core:39093]'
+    assert_equal(42.0, 42.0.round(308), bug5227)
+    assert_equal(1.0e307, 1.0e307.round(2), bug5227)
+
+    assert_raise(TypeError) {1.0.round("4")}
+    assert_raise(TypeError) {1.0.round(nil)}
+    def (prec = Object.new).to_int; 2; end
+    assert_equal(1.0, 0.998.round(prec))
   end
 
   VS = [

@@ -61,6 +61,10 @@ int rb_parse_in_eval(void);
 int rb_parse_in_main(void);
 VALUE rb_insns_name_array(void);
 
+/* cont.c */
+VALUE rb_obj_is_fiber(VALUE);
+void rb_fiber_reset_root_local_storage(VALUE);
+
 /* debug.c */
 PRINTF_ARGS(void ruby_debug_printf(const char*, ...), 1, 2);
 
@@ -88,7 +92,14 @@ void rb_call_end_proc(VALUE data);
 /* file.c */
 VALUE rb_home_dir(const char *user, VALUE result);
 VALUE rb_realpath_internal(VALUE basedir, VALUE path, int strict);
+VALUE rb_file_expand_path_fast(VALUE, VALUE);
+VALUE rb_file_expand_path_internal(VALUE, VALUE, int, int, VALUE);
 void Init_File(void);
+
+#ifdef _WIN32
+/* file.c, win32/file.c */
+void rb_w32_init_file(void);
+#endif
 
 /* gc.c */
 void Init_heap(void);
@@ -126,6 +137,7 @@ void Init_newline(void);
 /* numeric.c */
 int rb_num_to_uint(VALUE val, unsigned int *ret);
 int ruby_float_step(VALUE from, VALUE to, VALUE step, int excl);
+double ruby_float_mod(double x, double y);
 
 /* object.c */
 VALUE rb_obj_equal(VALUE obj1, VALUE obj2);
