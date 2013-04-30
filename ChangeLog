@@ -1,3 +1,30 @@
+Thu Apr 11 11:24:42 2013  Akinori MUSHA  <knu@iDaemons.org>
+
+	* lib/ipaddr.rb (IPAddr#in6_addr): Fix a typo with the closing
+	  parenthesis.
+
+Thu Apr 11 11:24:42 2013  Akinori MUSHA  <knu@iDaemons.org>
+
+	* lib/ipaddr.rb (IPAddr#in6_addr): Fix the parser so that it can
+	  recognize IPv6 addresses with only one edge 16-bit piece
+	  compressed, like [::2:3:4:5:6:7:8] or [1:2:3:4:5:6:7::].
+	  [Bug #7477]
+
+Thu Apr 11 11:22:32 2013  Naohisa Goto  <ngoto@gen-info.osaka-u.ac.jp>
+
+	* string.c (rb_str_concat): set array element after definition
+	  to fix compile error with Fujitsu C Compiler 5.6 on Solaris 10
+	  on Sparc.  [Bug #5878] [ruby-dev:45123]
+
+Thu Apr 11 11:21:25 2013  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* parse.y (parser_magic_comment): should pass the proper value.
+	  [ruby-dev:44984][Bug #5753]
+
+Thu Apr 11 11:18:57 2013  Tadayoshi Funaba  <tadf@dotrb.org>
+
+	* ext/date/date_core.c: [ruby-core:52303]
+
 Thu Apr  4 16:21:39 2013  NAKAMURA Usaku  <usa@ruby-lang.org>
 
 	* ext/objspace/objspace.c (count_nodes): fix key for unknown node.
