@@ -71,6 +71,7 @@ ARCHMINIOBJS = @MINIOBJS@
 BUILTIN_ENCOBJS = @BUILTIN_ENCOBJS@
 BUILTIN_TRANSSRCS = @BUILTIN_TRANSSRCS@
 BUILTIN_TRANSOBJS = @BUILTIN_TRANSOBJS@
+POSTLINK = @POSTLINK@
 
 RUBY_BASE_NAME=@RUBY_BASE_NAME@
 RUBY_PROGRAM_VERSION=@RUBY_PROGRAM_VERSION@
@@ -185,6 +186,7 @@ $(LIBRUBY_SO):
 		$(ECHO) linking shared-library $@
 		$(Q) $(LDSHARED) $(DLDFLAGS) $(OBJS) $(DLDOBJS) $(SOLIBS) $(OUTFLAG)$@
 		-$(Q) $(OBJCOPY) -w -L '$(SYMBOL_PREFIX)Init_*' -L '$(SYMBOL_PREFIX)*_threadptr_*' $@
+		$(Q) $(POSTLINK)
 		@-$(MINIRUBY) -e 'ARGV.each{|link| File.delete link if File.exist? link; \
 						  File.symlink "$(LIBRUBY_SO)", link}' \
 				$(LIBRUBY_ALIASES) || true

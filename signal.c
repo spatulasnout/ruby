@@ -17,6 +17,9 @@
 #include <stdio.h>
 #include <errno.h>
 #include "ruby_atomic.h"
+#ifdef HAVE_UNISTD_H
+# include <unistd.h>
+#endif
 
 #if !defined(_WIN32) && !defined(HAVE_GCC_ATOMIC_BUILTINS)
 rb_atomic_t
@@ -24,6 +27,17 @@ ruby_atomic_exchange(rb_atomic_t *ptr, rb_atomic_t val)
 {
     rb_atomic_t old = *ptr;
     *ptr = val;
+    return old;
+}
+
+rb_atomic_t
+ruby_atomic_compare_and_swap(rb_atomic_t *ptr, rb_atomic_t cmp,
+			     rb_atomic_t newval)
+{
+    rb_atomic_t old = *ptr;
+    if (old == cmp) {
+	*ptr = newval;
+    }
     return old;
 }
 #endif

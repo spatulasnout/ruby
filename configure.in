@@ -83,6 +83,7 @@ RUBY_PROGRAM_VERSION=`sed -n 's/^#define RUBY_VERSION "\(.*\)"/\1/p' $srcdir/ver
 AC_SUBST(RUBY_PROGRAM_VERSION)
 RUBY_RELEASE_DATE=`sed -n 's/^#define RUBY_RELEASE_DATE "\(.*\)"/\1/p' $srcdir/version.h`
 AC_SUBST(RUBY_RELEASE_DATE)
+RUBY_PATCHLEVEL=`sed -n 's/^#define RUBY_PATCHLEVEL //p' $srcdir/version.h`
 if test "$MAJOR" = "1"; then
   AC_DEFINE(CANONICALIZATION_FOR_MATHN)
 fi
@@ -307,6 +308,29 @@ if test "$target_cpu" != "$host_cpu" -a "$GCC" = yes -a "$cross_compiling" = no 
     RUBY_DEFAULT_ARCH("$target_cpu")
 fi
 
+AS_CASE(["$target_cpu-$target_os"], [[i[3-6]86*]], [
+	 AC_CACHE_CHECK([for __sync_val_compare_and_swap], [rb_cv_gcc_compiler_cas], [
+			 AC_TRY_LINK([unsigned long atomic_var;],
+				     [
+				      __sync_val_compare_and_swap(&atomic_var, 0, 1);
+				      ],
+				      [rb_cv_gcc_compiler_cas=yes],
+				      [rb_cv_gcc_compiler_cas=no])])
+	 if test "$rb_cv_gcc_compiler_cas" = no; then
+		 unset rb_cv_gcc_compiler_cas
+		 save_CFLAGS="$CFLAGS"
+		 CFLAGS="$CFLAGS -march=i486"
+		 AC_CACHE_CHECK([for __sync_val_compare_and_swap with -march=i486], [rb_cv_gcc_compiler_cas], [
+				 AC_TRY_LINK([unsigned long atomic_var;],
+					     [
+					      __sync_val_compare_and_swap(&atomic_var, 0, 1);
+					      ],
+					      [rb_cv_gcc_compiler_cas=yes
+					       ARCH_FLAG="-march=i486"],
+					      [rb_cv_gcc_compiler_cas=no])])
+		 CFLAGS="$save_CFLAGS"
+	 fi])
+
 AC_CHECK_TOOL(RANLIB, ranlib, :)
 AC_CHECK_TOOL(AR, ar)
 if test -z "$AR"; then
@@ -453,20 +477,26 @@ AC_DEFUN(RUBY_TRY_LDFLAGS, [
     save_LDFLAGS=
 ])
 
+AS_CASE([$RUBY_PATCHLEVEL], [-*],
+	[particular_werror_flags=yes], [particular_werror_flags=no])
+AC_ARG_ENABLE(werror,
+	AS_HELP_STRING([--disable-werror],
+		       [don't make warnings into errors
+		       even if a compiler support -Werror feature
+		       [[disabled by default unless development version]]]),
+	[particular_werror_flags=$enableval])
+
 rb_cv_warnflags="$warnflags"
 if test "$GCC:${warnflags+set}:no" = yes::no; then
-    particular_werror_flags=yes
     for wflag in -Wno-unused-parameter -Wno-parentheses -Wno-long-long \
 		 -Wno-missing-field-initializers \
 		 -Werror=pointer-arith \
 		 -Werror=write-strings \
 		 -Werror=declaration-after-statement \
 		 -Werror=shorten-64-to-32 \
-		 -Werror-implicit-function-declaration \
+		 -Werror=implicit-function-declaration \
 		 ; do
-	if test "$particular_werror_flags" = yes; then
-	    wflag=`echo x$wflag | sed 's/^x-Werror-/-Werror=/;s/^x//'`
-	else
+	if test "$particular_werror_flags" != yes; then
 	    wflag=`echo x$wflag | sed 's/^x-Werror=/-W/;s/^x//'`
 	fi
 	ok=no
@@ -880,7 +910,22 @@ if test "$GCC" = yes; then
 	AC_DEFINE_UNQUOTED([RUBY_ALIAS_FUNCTION_VOID(prot, name, args)],
 			   [RUBY_ALIAS_FUNCTION_TYPE(void, prot, name, args)])
     fi
-    AC_CACHE_CHECK([for atomic builtins], [rb_cv_gcc_atomic_builtins], [
+
+    AC_CACHE_CHECK([for __atomic builtins], [rb_cv_gcc_atomic_builtins], [
+	AC_TRY_LINK([unsigned char atomic_var;],
+		    [
+			__atomic_exchange_n(&atomic_var, 0, __ATOMIC_SEQ_CST);
+			__atomic_exchange_n(&atomic_var, 1, __ATOMIC_SEQ_CST);
+			__atomic_fetch_add(&atomic_var, 1, __ATOMIC_SEQ_CST);
+			__atomic_fetch_sub(&atomic_var, 1, __ATOMIC_SEQ_CST);
+		    ],
+		    [rb_cv_gcc_atomic_builtins=yes],
+		    [rb_cv_gcc_atomic_builtins=no])])
+    if test "$rb_cv_gcc_atomic_builtins" = yes; then
+	AC_DEFINE(HAVE_GCC_ATOMIC_BUILTINS)
+    fi
+
+    AC_CACHE_CHECK([for __sync builtins], [rb_cv_gcc_sync_builtins], [
 	AC_TRY_LINK([unsigned char atomic_var;],
 		    [
 			__sync_lock_test_and_set(&atomic_var, 0);
@@ -888,11 +933,12 @@ if test "$GCC" = yes; then
 			__sync_fetch_and_add(&atomic_var, 1);
 			__sync_fetch_and_sub(&atomic_var, 1);
 		    ],
-		    [rb_cv_gcc_atomic_builtins=yes],
-		    [rb_cv_gcc_atomic_builtins=no])])
-    if test "$rb_cv_gcc_atomic_builtins" = yes; then
-	AC_DEFINE(HAVE_GCC_ATOMIC_BUILTINS)
+		    [rb_cv_gcc_sync_builtins=yes],
+		    [rb_cv_gcc_sync_builtins=no])])
+    if test "$rb_cv_gcc_sync_builtins" = yes; then
+	AC_DEFINE(HAVE_GCC_SYNC_BUILTINS)
     fi
+
 fi
 
 AC_CACHE_CHECK(for exported function attribute, rb_cv_func_exported, [
@@ -948,6 +994,8 @@ AC_ARG_ENABLE(pthread,
 dnl Checks for libraries.
 AS_CASE(["$target_os"],[*bsd*|dragonfly*],[],[ac_cv_func_daemon=no])
 
+POSTLINK=:
+AC_SUBST(POSTLINK)
 AS_CASE(["$target_os"],
 [solaris*], [
 		AC_DEFINE(SIZEOF_STRUCT_DIRENT_TOO_SMALL, 1)
@@ -1013,6 +1061,12 @@ main()
                 if test "$rb_cv_broken_crypt" = yes; then
                   AC_DEFINE(BROKEN_CRYPT, 1)
                 fi
+		AC_CHECK_PROGS(codesign, codesign)
+		if test -n "$codesign"; then
+		    POSTLINK="test -z '\$(RUBY_CODESIGN)' || $codesign -s '\$(RUBY_CODESIGN)' -f \$@"
+		    LINK_SO="$LINK_SO
+\$(POSTLINK)"
+		fi
 		],
 [hpux*], [	LIBS="-lm $LIBS"
 		ac_cv_c_inline=no],
@@ -1169,7 +1223,7 @@ AC_CHECK_HEADERS(limits.h sys/file.h sys/ioctl.h sys/syscall.h\
 		 syscall.h pwd.h grp.h a.out.h utime.h direct.h sys/resource.h \
 		 sys/mkdev.h sys/utime.h xti.h netinet/in_systm.h float.h ieeefp.h \
 		 ucontext.h intrinsics.h langinfo.h locale.h sys/sendfile.h time.h \
-		 net/socket.h sys/socket.h process.h)
+		 net/socket.h sys/socket.h process.h atomic.h)
 
 AC_TYPE_SIZE_T
 RUBY_CHECK_SIZEOF(size_t, [int long void*], [], [@%:@include <sys/types.h>])
@@ -1350,6 +1404,7 @@ AS_CASE(["$target_os"],
 [aix* | k*bsd*-gnu | kopensolaris*-gnu | linux* | darwin*], [AC_DEFINE(SPT_TYPE,SPT_REUSEARGV)],
 [hpux*], [AC_DEFINE(SPT_TYPE,SPT_PSTAT) ],
 [])
+AC_CHECK_HEADERS(sys/pstat.h)
 
 
 AC_CACHE_CHECK(for signbit, rb_cv_have_signbit,
@@ -2918,7 +2973,7 @@ AC_ARG_WITH(opt-dir,
 		val=`IFS="$PATH_SEPARATOR"
 		    for dir in $withval; do
 			echo x ${LIBPATHFLAG} ${RPATHFLAG} |
-			sed -E 's/^x *//;s'"${PATH_SEPARATOR}"'%1\\$-s|%s'"${IFS}${dir}/lib${IFS}g"
+			sed "s/^x *//;s${IFS}"'%1\\$-s'"${IFS}${dir}/lib${IFS}g;s${IFS}%s${IFS}${dir}/lib${IFS}g"
 		    done | tr '\012' ' '`
 		set +x
 		LDFLAGS="$LDFLAGS${LDFLAGS:+ }$val"
