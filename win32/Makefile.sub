@@ -266,7 +266,7 @@ RCFLAGS=-nologo
 !endif
 
 LIBRUBY_LDSHARED = $(LDSHARED)
-LIBRUBY_DLDFLAGS = $(EXTLDFLAGS) -implib:dummy.lib -def:$(RUBYDEF)
+LIBRUBY_DLDFLAGS = $(EXTLDFLAGS) -implib:$(LIBRUBY) -def:$(RUBYDEF)
 
 EXEEXT = .exe
 EXECUTABLE_EXTS = ".exe",".com",".cmd",".bat"
