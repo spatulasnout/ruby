@@ -2357,7 +2357,7 @@ Init_ISeq(void)
 #endif
 
     /* disable this feature because there is no verifier. */
-    /* rb_define_singleton_method(rb_cISeq, "load", iseq_s_load, -1); */
+    rb_define_singleton_method(rb_cISeq, "load", iseq_s_load, -1);
     (void)iseq_s_load;
 
     rb_define_singleton_method(rb_cISeq, "compile", iseq_s_compile, -1);
