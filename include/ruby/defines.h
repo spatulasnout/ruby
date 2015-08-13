@@ -168,7 +168,9 @@ void xfree(void*);
 #endif
 
 #ifdef RUBY_EXPORT
+#if !defined(RUBY_EXTENSION_NEEDS_RUBY_EXPORT)
 #undef RUBY_EXTERN
+#endif
 
 #ifndef FALSE
 # define FALSE 0
