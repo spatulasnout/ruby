@@ -59,7 +59,7 @@ unless have_header("openssl/conf_api.h")
   raise "OpenSSL 0.9.6 or later required."
 end
 unless OpenSSL.check_func("SSL_library_init()", "openssl/ssl.h")
-  raise "Ignore OpenSSL broken by Apple.\nPlease use another openssl. (e.g. using `configure --with-openssl-dir=/path/to/openssl')"
+ # raise "Ignore OpenSSL broken by Apple.\nPlease use another openssl. (e.g. using `configure --with-openssl-dir=/path/to/openssl')"
 end
 
 Logging::message "=== Checking for OpenSSL features... ===\n"

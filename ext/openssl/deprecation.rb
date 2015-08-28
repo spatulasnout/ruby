@@ -1,5 +1,6 @@
 module OpenSSL
   def self.deprecated_warning_flag
+    @deprecated_warning_flag = "-Wno-deprecated-declarations"
     unless flag = (@deprecated_warning_flag ||= nil)
       if try_compile("", flag = "-Werror=deprecated-declarations")
         if with_config("broken-apple-openssl")
