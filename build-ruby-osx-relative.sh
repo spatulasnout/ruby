@@ -22,7 +22,7 @@ CFLAGS_OVERRIDE="-O3 -DRUBY_INSTALL_PREFIX_ENV=$PFX -fno-fast-math -ggdb3 -Wall 
 # -install_name @executable_path/../pmruby/lib/libruby.2.2.0.dylib
 DLDFLAGS_OVERRIDE="-Wl,-undefined,dynamic_lookup -Wl,-multiply_defined,suppress -install_name @rpath/libruby.2.2.0.dylib -current_version 2.2.0 -compatibility_version 2.2.0  -fstack-protector -Wl,-u,_objc_msgSend -framework CoreFoundation -arch $ARCH"
 
-CFLAGS="$CFLAGS_OVERRIDE" LDSHARED="clang -dynamiclib" DLDFLAGS="$DLDFLAGS_OVERRIDE" LDFLAGS="$RPATH_OPTS $SDK_OPTS" ./configure --prefix=$PFX --program-suffix=22 --enable-shared --enable-load-relative --disable-install-doc --with-arch=$ARCH
+CFLAGS="$CFLAGS_OVERRIDE" CPPFLAGS="$CFLAGS_OVERRIDE" LDSHARED="clang -dynamiclib" DLDFLAGS="$DLDFLAGS_OVERRIDE" LDFLAGS="$RPATH_OPTS $SDK_OPTS" ./configure --prefix=$PFX --program-suffix=22 --enable-shared --enable-load-relative --disable-install-doc --with-arch=$ARCH
 
 
 make && make test
