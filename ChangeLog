@@ -1,3 +1,131 @@
+Tue Aug 25 01:01:01 2015  Koichi Sasada <ko1@atdot.net>
+
+	* insns.def (defineclass): introduce an ad-hoc patch to avoid
+	  an issue reported on [Bug #10871].
+
+	  This patch does not fix completely. For example, method definition
+	  in a block (like 1.times{def ...; end}) still causes same issue.
+	  To solve all, we need a huge patch and it seems difficult for
+	  stable branch.
+
+	  Use Ruby 2.3 and later to solve this issue completely.
+	  (See [Bug #10943])
+
+Tue Aug 18 22:52:50 2015  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* tool/downloader.rb: support old versions of ruby.
+
+	* tool/downloader.rb: now can download gems by http if openssl is not
+	  available (this may be danger!)
+
+Tue Aug 18 20:10:13 2015  Tanaka Akira  <akr@fsij.org>
+
+	* numeric.c (Init_Numeric): Fix document for Float::MIN and
+	  Float::EPSILON.
+
+Mon Aug 17 23:07:47 2015  SHIBATA Hiroshi  <hsbt@ruby-lang.org>
+
+	* lib/rubygems.rb: bump version to 2.4.5.1. this version fixed
+	  CVE-2015-3900.
+	* lib/rubygems/remote_fetcher.rb: ditto.
+	* test/rubygems/test_gem_remote_fetcher.rb: added testcase for CVE-2015-3900
+
+Mon Aug 17 23:00:56 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* ext/win32/lib/win32/registry.rb (API#SetValue): data size should
+	  be in bytes, not in chars.  [ruby-core:70365] [Bug #11439]
+
+Mon Aug 17 23:00:56 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* ext/win32/lib/win32/registry.rb (API#SetValue): add terminator
+	  size, not 1 byte.  [ruby-core:70365] [Bug #11439]
+
+Sun Aug 16 03:14:04 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* re.c (rb_memsearch): should match only char boundaries in wide
+	  character encodings.  [ruby-core:70220] [Bug #11413]
+
+Sun Aug 16 03:00:44 2015  Eric Wong  <e@80x24.org>
+
+	* symbol.h (struct RSymbol): add hashval field
+	* symbol.c (dsymbol_alloc): setup hashval field once
+	* hash.c (rb_any_hash): return RSymbol->hashval directly
+	* common.mk: hash.o depends on symbol.h
+	  Thanks to Bruno Escherl <bruno@escherl.net> for the bug report
+	  [ruby-core:70129] [Bug #11396]
+
+Fri Aug 14 16:30:43 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* transcode.c (rb_econv_set_replacement): target encoding name can
+	  be empty now.  [ruby-core:69841] [Bug #11324]
+
+Fri Aug 14 15:24:12 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* hash.c (rb_any_hash): fix Float hash.  rb_dbl_hash() returns a
+	  Fixnum, but not a long.  [Bug #9381]
+
+Fri Aug 14 15:09:34 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* ext/json/parser/parser.rl: raise with messages in UTF-8
+	  encoding.  [ruby-core:67386] [Bug #10705]
+
+Fri Aug 14 00:44:34 2015  Eric Wong  <e@80x24.org>
+
+	* io.c (rb_io_oflags_modestr): handle O_TRUNC correctly
+	* test/ruby/test_io.rb (test_reopen_stdio): new test
+	  Patch-by: cremno phobia <cremno@mail.ru>
+	  [ruby-core:69779] [Bug #11319]
+
+Thu Aug 13 01:25:26 2015  Benoit Daloze  <eregontp@gmail.com>
+
+	* lib/net/ftp.rb (makeport): close the TCPServer
+	  when sending the port fails.
+
+	* test/net/ftp/test_ftp.rb: test for above.
+
+Thu Aug 13 01:03:13 2015  Kazuki Tsujimoto  <kazuki@callcc.net>
+
+	* lib/net/http/response.rb (Net::HTTPResponse::Inflater#finish):
+	  fix a bug that empty gzipped response body causes Zlib::BufError.
+	  [ruby-core:68846] [Bug #11058]
+
+	* test/net/http/test_httpresponse.rb: tests for the above.
+
+Thu Aug 13 01:03:13 2015  Kazuki Tsujimoto  <kazuki@callcc.net>
+
+	* lib/net/http/response.rb (Net::HTTPResponse#inflater):
+	  fix TypeError. An exception object might be nil.
+	  [ruby-core:68846] [Bug #11058]
+
+Thu Aug 13 00:03:24 2015  Aaron Patterson <tenderlove@ruby-lang.org>
+
+	* .travis.yml: update libssl before running tests. 
+	  Thanks to Chris Sinjakli <chris@sinjakli.co.uk> for figuring out the
+	  travis settings!
+
+Thu Aug 13 00:03:24 2015  Aaron Patterson <tenderlove@ruby-lang.org>
+
+	* ext/openssl/lib/openssl/ssl.rb (module OpenSSL): raise a more
+	  helpful exception when verifying the peer connection and an
+	  anonymous cipher has been selected. [ruby-core:68330] [Bug #10910]
+	  Thanks to Chris Sinjakli <chris@sinjakli.co.uk> for the patch.
+
+	* test/openssl/test_ssl.rb (class OpenSSL): test for change
+
+Wed Aug 12 23:57:01 2015  NARUSE, Yui  <naruse@ruby-lang.org>
+
+	* ext/date/extconf.rb: try_cflags("-std=iso9899:1999") [Bug #10906]
+	  ruby itself (including numeric.c) is built with strict compile
+	  options including -std=iso9899:1999, but ext/date is not.
+	  By the way -std=iso9899:1999 is not only a warning option but also
+	  changes behavior like MACRO definitions for example INFINITY.
+	  gcc on Solaris affect this.
+
+Wed Aug 12 23:53:39 2015  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* win32/win32.c (waitpid): return immediately if interrupted.
+	  reported by <takkanm AT gmail.com> [ruby-dev:49176] [Bug #11340]
+
 Wed Aug 12 01:05:58 2015  Jeremy Evans  <merch-redmine@jeremyevans.net>
 
 	* test/openssl/test_ssl.rb: Fix LocalJumpErrors being raised
