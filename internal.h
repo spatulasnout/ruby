@@ -73,7 +73,15 @@ extern "C" {
     (__GNUC__ == (major) && __GNUC_MINOR__ > (minor)) || \
     (__GNUC__ == (major) && __GNUC_MINOR__ == (minor) && __GNUC_PATCHLEVEL__ >= (patchlevel))))
 
-#if GCC_VERSION_SINCE(4, 6, 0)
+#ifndef __has_feature
+# define __has_feature(x) 0
+#endif
+
+#ifndef __has_extension
+# define __has_extension __has_feature
+#endif
+
+#if GCC_VERSION_SINCE(4, 6, 0) || __has_extension(c_static_assert)
 # define STATIC_ASSERT(name, expr) _Static_assert(expr, #name ": " #expr)
 #else
 # define STATIC_ASSERT(name, expr) typedef int static_assert_##name##_check[1 - 2*!(expr)]
@@ -843,6 +851,7 @@ rb_float_new_inline(double d)
 void rb_obj_copy_ivar(VALUE dest, VALUE obj);
 VALUE rb_obj_equal(VALUE obj1, VALUE obj2);
 VALUE rb_class_search_ancestor(VALUE klass, VALUE super);
+NORETURN(void rb_undefined_alloc(VALUE klass));
 
 struct RBasicRaw {
     VALUE flags;
@@ -984,8 +993,8 @@ VALUE rb_external_str_with_enc(VALUE str, rb_encoding *eenc);
 #endif
 #define STR_NOEMBED      FL_USER1
 #define STR_SHARED       FL_USER2 /* = ELTS_SHARED */
-#define STR_EMBED_P(str) (!FL_TEST((str), STR_NOEMBED))
-#define STR_SHARED_P(s)  FL_ALL((s), STR_NOEMBED|ELTS_SHARED)
+#define STR_EMBED_P(str) (!FL_TEST_RAW((str), STR_NOEMBED))
+#define STR_SHARED_P(s)  FL_ALL_RAW((s), STR_NOEMBED|ELTS_SHARED)
 #define is_ascii_string(str) (rb_enc_str_coderange(str) == ENC_CODERANGE_7BIT)
 #define is_broken_string(str) (rb_enc_str_coderange(str) == ENC_CODERANGE_BROKEN)
 size_t rb_str_memsize(VALUE);

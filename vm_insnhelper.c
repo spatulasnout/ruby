@@ -1691,7 +1691,7 @@ vm_call_method(rb_thread_t *th, rb_control_frame_t *cfp, rb_call_info_t *ci)
 		CALLER_SETUP_ARG(cfp, ci);
 		rb_check_arity(ci->argc, 1, 1);
 		ci->aux.index = 0;
-		CI_SET_FASTPATH(ci, vm_call_attrset, enable_fastpath && !(ci->flag & VM_CALL_ARGS_SPLAT));
+		CI_SET_FASTPATH(ci, vm_call_attrset, enable_fastpath && !(ci->flag & VM_CALL_ARGS_SPLAT) && ci->kw_arg == NULL);
 		return vm_call_attrset(th, cfp, ci);
 	      }
 	      case VM_METHOD_TYPE_IVAR:{
@@ -2094,10 +2094,11 @@ vm_invoke_block(rb_thread_t *th, rb_control_frame_t *reg_cfp, rb_call_info_t *ci
     }
     else {
 	VALUE val;
+	int argc;
 	CALLER_SETUP_ARG(th->cfp, ci);
-	val = vm_yield_with_cfunc(th, block, block->self, block->klass,
-				  ci->argc, STACK_ADDR_FROM_TOP(ci->argc), 0);
-	POPN(ci->argc); /* TODO: should put before C/yield? */
+	argc = ci->argc;
+	val = vm_yield_with_cfunc(th, block, block->self, block->klass, argc, STACK_ADDR_FROM_TOP(argc), 0);
+	POPN(argc); /* TODO: should put before C/yield? */
 	return val;
     }
 }
