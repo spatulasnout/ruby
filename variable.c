@@ -1999,7 +1999,9 @@ sv_i(st_data_t k, st_data_t v, st_data_t a)
 static int
 rb_local_constants_i(st_data_t const_name, st_data_t const_value, st_data_t ary)
 {
-    rb_ary_push((VALUE)ary, ID2SYM((ID)const_name));
+    if (rb_is_const_id(const_name)) {
+	rb_ary_push((VALUE)ary, ID2SYM((ID)const_name));
+    }
     return ST_CONTINUE;
 }
 
@@ -2073,6 +2075,9 @@ rb_const_list(void *data)
  *  <i>mod</i>. This includes the names of constants in any included
  *  modules (example at start of section), unless the <i>inherit</i>
  *  parameter is set to <code>false</code>.
+ *
+ *  The implementation makes no guarantees about the order in which the
+ *  constants are yielded.
  *
  *    IO.constants.include?(:SYNC)        #=> true
  *    IO.constants(false).include?(:SYNC) #=> false

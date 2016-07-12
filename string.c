@@ -1635,6 +1635,9 @@ rb_str_modify_expand(VALUE str, long expand)
 	long len = RSTRING_LEN(str);
 	long capa = len + expand;
 	int termlen = TERM_LEN(str);
+	if (expand >= LONG_MAX - len - termlen) {
+	    rb_raise(rb_eArgError, "string size too big");
+	}
 	if (!STR_EMBED_P(str)) {
 	    REALLOC_N(RSTRING(str)->as.heap.ptr, char, capa + termlen);
 	    RSTRING(str)->as.heap.aux.capa = capa;
@@ -3241,6 +3244,10 @@ enc_succ_alnum_char(char *p, long len, rb_encoding *enc, char *carry)
     int range;
     char save[ONIGENC_CODE_TO_MBC_MAXLEN];
 
+    /* skip 03A2, invalid char between GREEK CAPITAL LETTERS */
+    int try;
+    const int max_gaps = 1;
+
     c = rb_enc_mbc_to_codepoint(p, p+len, enc);
     if (rb_enc_isctype(c, ONIGENC_CTYPE_DIGIT, enc))
         ctype = ONIGENC_CTYPE_DIGIT;
@@ -3250,11 +3257,13 @@ enc_succ_alnum_char(char *p, long len, rb_encoding *enc, char *carry)
         return NEIGHBOR_NOT_CHAR;
 
     MEMCPY(save, p, char, len);
-    ret = enc_succ_char(p, len, enc);
-    if (ret == NEIGHBOR_FOUND) {
-        c = rb_enc_mbc_to_codepoint(p, p+len, enc);
-        if (rb_enc_isctype(c, ctype, enc))
-            return NEIGHBOR_FOUND;
+    for (try = 0; try <= max_gaps; ++try) {
+	ret = enc_succ_char(p, len, enc);
+	if (ret == NEIGHBOR_FOUND) {
+	    c = rb_enc_mbc_to_codepoint(p, p+len, enc);
+	    if (rb_enc_isctype(c, ctype, enc))
+		return NEIGHBOR_FOUND;
+	}
     }
     MEMCPY(p, save, char, len);
     range = 1;
