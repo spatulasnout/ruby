@@ -23,19 +23,22 @@
 .ppack
 .svn
 Makefile
+Makefile.old
 extconf.h
 y.output
 y.tab.c
 
 # /
+/*-fake.rb
 /*.pc
 /*_prelude.c
 /COPYING.LIB
-/ChangeLog-1.8.0
+/ChangeLog-*
 /ChangeLog.pre-alpha
 /ChangeLog.pre1_1
 /Doxyfile
 /GNUmakefile
+/GNUmakefile.old
 /README.atheos
 /README.fat-patch
 /README.v6
@@ -44,6 +47,7 @@ y.tab.c
 /autom4te*.cache
 /automake
 /beos
+/bmlog-*
 /breakpoints.gdb
 /config.cache
 /config.h
@@ -51,6 +55,11 @@ y.tab.c
 /config.status
 /config.status.lineno
 /configure
+/coverage/simplecov
+/coverage/.last_run.json
+/coverage/.resultset.json*
+/coverage/assets
+/coverage/index.html
 /doc/capi
 /enc.mk
 /encdb.h
@@ -82,6 +91,7 @@ y.tab.c
 /rubicon
 /ruby
 /ruby-man.rd.gz
+/sizes.c
 /test.rb
 /tmp
 /transdb.h
@@ -92,6 +102,10 @@ y.tab.c
 
 # /benchmark/
 /benchmark/bmx_*.rb
+/benchmark/fasta.output.*
+/benchmark/wc.input
+
+/enc/unicode/data
 
 # /enc/trans/
 /enc/trans/*.c
@@ -102,6 +116,15 @@ y.tab.c
 # /ext/dl/callback/
 /ext/dl/callback/callback-*.c
 /ext/dl/callback/callback.c
+
+# /ext/etc/
+/ext/etc/constdefs.h
+
+# /ext/fiddle/
+/ext/fiddle/libffi-*
+
+# /ext/rbconfig/
+/ext/rbconfig/sizeof/sizes.c
 
 # /ext/ripper/
 /ext/ripper/eventids1.c
@@ -118,9 +141,16 @@ y.tab.c
 # /ext/tk/
 /ext/tk/config_list
 
+# /gems
+/gems/*.gem
+
 # /spec/
 /spec/mspec
 /spec/rubyspec
+
+# /tool/
+/tool/config.guess
+/tool/config.sub
 
 # /win32/
 /win32/*.ico
