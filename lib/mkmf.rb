@@ -1751,7 +1751,9 @@ SRC
   # invoked with the option and a stripped output string is returned
   # without modifying any of the global values mentioned above.
   def pkg_config(pkg, option=nil)
-    if pkgconfig = with_config("#{pkg}-config") and find_executable0(pkgconfig)
+    if RUBY_PLATFORM =~ /mswin/
+      pkgconfig = get = nil  # finding cygwin's pkg-config.exe yields bad results for an MSVC build
+    elsif pkgconfig = with_config("#{pkg}-config") and find_executable0(pkgconfig)
       # iff package specific config command is given
     elsif ($PKGCONFIG ||=
            (pkgconfig = with_config("pkg-config", ("pkg-config" unless CROSS_COMPILING))) &&
