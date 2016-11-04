@@ -1702,7 +1702,9 @@ SRC
   # The actual command name can be overridden by
   # <code>--with-pkg-config</code> command line option.
   def pkg_config(pkg)
-    if pkgconfig = with_config("#{pkg}-config") and find_executable0(pkgconfig)
+    if RUBY_PLATFORM =~ /mswin/
+      pkgconfig = get = nil  # finding cygwin's pkg-config.exe yields bad results for an MSVC build
+    elsif pkgconfig = with_config("#{pkg}-config") and find_executable0(pkgconfig)
       # iff package specific config command is given
       get = proc {|opt| `#{pkgconfig} --#{opt}`.strip}
     elsif ($PKGCONFIG ||=
