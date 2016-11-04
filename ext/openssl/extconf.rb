@@ -46,8 +46,8 @@ result = pkg_config("openssl") && have_header("openssl/ssl.h")
 
 unless result
   result = have_header("openssl/ssl.h")
-  result &&= %w[crypto libeay32].any? {|lib| have_library(lib, "OpenSSL_add_all_digests")}
-  result &&= %w[ssl ssleay32].any? {|lib| have_library(lib, "SSL_library_init")}
+  result &&= %w[crypto libeay32MD].any? {|lib| have_library(lib, "OpenSSL_add_all_digests")}
+  result &&= %w[ssl ssleay32MD].any? {|lib| have_library(lib, "SSL_library_init")}
   unless result
     Logging::message "=== Checking for required stuff failed. ===\n"
     Logging::message "Makefile wasn't created. Fix the errors above.\n"
