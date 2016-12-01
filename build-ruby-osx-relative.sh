@@ -4,26 +4,44 @@
 
 set -e
 
-# Remove macports from path
-export PATH=~/bin:/sbin:/usr/sbin:/usr/bin:/bin
+RB_SUFFIX="22"
+PM_RELATIVE_LIB_DIR="../pmruby/lib"  # This is different for our embedded ruby, vs. Catalog ruby (counterintuitively, embedded is 'ruby' and standalone is 'pmruby')
+ARCH="x86_64"
+BREW_DIR="/usr/local/cbits-build-x64/homebrew"
+
+if [[ -z "$1" ]]; then
+  PFX="/usr/local/ruby$RB_SUFFIX"
+else
+  PFX="$1"
+fi
+
+echo "Using --prefix=$PFX"
+
+
+unset RUBYOPT
+unset RUBY_INSTALL_PREFIX
+
+export PATH="$BREW_DIR/bin:/sbin:/usr/sbin:/usr/bin:/bin"
+
+export PKG_CONFIG_PATH="$BREW_DIR/lib/pkgconfig:$BREW_DIR/opt/openssl/lib/pkgconfig"
+
+RPATH_OPTS="-Wl,-rpath,@executable_path/../lib -Wl,-rpath,@executable_path/../pmruby/lib"
+SDK_OPTS="-mmacosx-version-min=10.9 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.10.sdk"
+
+export CFLAGS="-O3 -fno-fast-math -ggdb3 -march=core2 -DRUBY_INSTALL_PREFIX_ENV=$PFX $SDK_OPTS -Wall -Wextra -Wno-unused-parameter -Wno-parentheses -Wno-long-long -Wno-missing-field-initializers -Wunused-variable -Wpointer-arith -Wwrite-strings -Wdeclaration-after-statement -Wshorten-64-to-32 -Wimplicit-function-declaration"
+
+export CPPFLAGS="$CFLAGS"
+
+export DLDFLAGS="-Wl,-headerpad_max_install_names $RPATH_OPTS -Wl,-undefined,dynamic_lookup -Wl,-multiply_defined,suppress"
 
 echo "Beginning full rebuild of ruby..."
-make distclean || echo "Already distcleaned? Continuing..."
-# autoconf -f
+if [[ -f "./configure" ]]; then
+  make distclean || echo "Already distcleaned? Continuing..."
+else
+  autoconf
+fi
 
-ARCH="i386"
-RPATH_OPTS="-Wl,-rpath,@executable_path/../lib -Wl,-rpath,@executable_path/../pmruby/lib"
-# RPATH_OPTS="-Wl,-rpath,@executable_path/../pmruby/lib"
-SDK_OPTS="-isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.8.sdk -mmacosx-version-min=10.8"
-PFX=/opt/ruby22
-
-CFLAGS_OVERRIDE="-O3 -DRUBY_INSTALL_PREFIX_ENV=$PFX -fno-fast-math -ggdb3 -Wall -Wextra -Wno-unused-parameter -Wno-parentheses -Wno-long-long -Wno-missing-field-initializers -Wunused-variable -Wpointer-arith -Wwrite-strings -Wdeclaration-after-statement -Wshorten-64-to-32 -Wimplicit-function-declaration -Wdivision-by-zero -Wdeprecated-declarations -Wextra-tokens  -fno-common -pipe -arch $ARCH $SDK_OPTS"
-
-# -install_name @executable_path/../pmruby/lib/libruby.2.2.0.dylib
-DLDFLAGS_OVERRIDE="-Wl,-undefined,dynamic_lookup -Wl,-multiply_defined,suppress -install_name @rpath/libruby.2.2.0.dylib -current_version 2.2.0 -compatibility_version 2.2.0  -fstack-protector -Wl,-u,_objc_msgSend -framework CoreFoundation -arch $ARCH"
-
-CFLAGS="$CFLAGS_OVERRIDE" CPPFLAGS="$CFLAGS_OVERRIDE" LDSHARED="clang -dynamiclib" DLDFLAGS="$DLDFLAGS_OVERRIDE" LDFLAGS="$RPATH_OPTS $SDK_OPTS" ./configure --prefix=$PFX --program-suffix=22 --enable-shared --enable-load-relative --disable-install-doc --with-arch=$ARCH
-
+./configure --prefix="$PFX" --program-suffix="$RB_SUFFIX" --enable-shared --enable-load-relative --disable-install-doc --with-out-ext=tcl --with-out-ext=tk
 
 make && make test
 
