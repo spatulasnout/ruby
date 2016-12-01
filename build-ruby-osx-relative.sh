@@ -35,8 +35,11 @@ export CPPFLAGS="$CFLAGS"
 export DLDFLAGS="-Wl,-headerpad_max_install_names $RPATH_OPTS -Wl,-undefined,dynamic_lookup -Wl,-multiply_defined,suppress"
 
 echo "Beginning full rebuild of ruby..."
-make distclean || echo "Already distcleaned? Continuing..."
-# autoconf -f
+if [[ -f "./configure" ]]; then
+  make distclean || echo "Already distcleaned? Continuing..."
+else
+  autoconf
+fi
 
 ./configure --prefix="$PFX" --program-suffix="$RB_SUFFIX" --enable-shared --enable-load-relative --disable-install-doc --with-out-ext=tcl --with-out-ext=tk
 
