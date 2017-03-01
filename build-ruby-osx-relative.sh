@@ -7,7 +7,11 @@ set -e
 RB_SUFFIX="22"
 PM_RELATIVE_LIB_DIR="../pmruby/lib"  # This is different for our embedded ruby, vs. Catalog ruby (counterintuitively, embedded is 'ruby' and standalone is 'pmruby')
 ARCH="x86_64"
-BREW_DIR="/usr/local/cbits-build-x64/homebrew"
+if [[ -z "$HOMEBREW_PREFIX" ]]; then
+  BREW_DIR="$HOMEBREW_PREFIX"
+else
+  BREW_DIR="/usr/local/cbits-build-x64/release/homebrew"
+fi
 
 if [[ -z "$1" ]]; then
   PFX="/usr/local/ruby$RB_SUFFIX"
