@@ -55,7 +55,7 @@ module OpenSSL
     # This class is only provided for backwards compatibility.
     # Use OpenSSL::Digest instead.
     class Digest < Digest; end # :nodoc:
-    deprecate_constant :Digest
+    # deprecate_constant :Digest
 
   end # Digest
 

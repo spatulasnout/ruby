@@ -62,6 +62,6 @@ module OpenSSL
     # This class is only provided for backwards compatibility.
     # Use OpenSSL::Cipher.
     class Cipher < Cipher; end
-    deprecate_constant :Cipher
+    # deprecate_constant :Cipher
   end # Cipher
 end # OpenSSL
