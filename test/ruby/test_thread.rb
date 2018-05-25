@@ -744,9 +744,24 @@ _eom
   end
 
   def test_uninitialized
-    c = Class.new(Thread)
-    c.class_eval { def initialize; end }
+    c = Class.new(Thread) {def initialize; end}
     assert_raise(ThreadError) { c.new.start }
+
+    bug11959 = '[ruby-core:72732] [Bug #11959]'
+
+    c = Class.new(Thread) {def initialize; exit; end}
+    assert_raise(ThreadError, bug11959) { c.new }
+
+    c = Class.new(Thread) {def initialize; raise; end}
+    assert_raise(ThreadError, bug11959) { c.new }
+
+    c = Class.new(Thread) {
+      def initialize
+        pending = pending_interrupt?
+        super {pending}
+      end
+    }
+    assert_equal(false, c.new.value, bug11959)
   end
 
   def test_backtrace
@@ -1033,4 +1048,14 @@ q.pop
     assert_not_predicate(status, :signaled?, FailDesc[status, bug9751, output])
     assert_predicate(status, :success?, bug9751)
   end if Process.respond_to?(:fork)
+
+  def test_thread_interrupt_for_killed_thread
+    assert_normal_exit(<<-_end, '[Bug #8996]', timeout: 5, timeout_error: nil)
+      trap(/mswin|mignw/ =~ RUBY_PLATFORM ? :KILL : :TERM){exit}
+      while true
+        t = Thread.new{sleep 0}
+        t.raise Interrupt
+      end
+    _end
+  end
 end

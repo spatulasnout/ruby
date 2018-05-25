@@ -689,10 +689,10 @@ rb_str_format(int argc, const VALUE *argv, VALUE fmt)
 		    CHECK(n);
 		    rb_enc_mbcput(c, &buf[blen], enc);
 		    blen += n;
-		    FILL(' ', width-1);
+		    if (width > 1) FILL(' ', width-1);
 		}
 		else {
-		    FILL(' ', width-1);
+		    if (width > 1) FILL(' ', width-1);
 		    CHECK(n);
 		    rb_enc_mbcput(c, &buf[blen], enc);
 		    blen += n;
@@ -1024,13 +1024,19 @@ rb_str_format(int argc, const VALUE *argv, VALUE fmt)
 		int sign = (flags&FPLUS) ? 1 : 0, zero = 0;
 		long len, done = 0;
 		int prefix = 0;
-		if (!RB_TYPE_P(val, T_RATIONAL)) {
+		if (FIXNUM_P(val) || RB_TYPE_P(val, T_BIGNUM)) {
+		    den = INT2FIX(1);
+		    num = val;
+		}
+		else if (RB_TYPE_P(val, T_RATIONAL)) {
+		    den = rb_rational_den(val);
+		    num = rb_rational_num(val);
+		}
+		else {
 		    nextvalue = val;
 		    goto float_value;
 		}
 		if (!(flags&FPREC)) prec = default_float_precision;
-		den = rb_rational_den(val);
-		num = rb_rational_num(val);
 		if (FIXNUM_P(num)) {
 		    if ((SIGNED_VALUE)num < 0) {
 			long n = -FIX2LONG(num);
@@ -1129,6 +1135,8 @@ rb_str_format(int argc, const VALUE *argv, VALUE fmt)
 		fval = RFLOAT_VALUE(rb_Float(val));
 		if (isnan(fval) || isinf(fval)) {
 		    const char *expr;
+		    int elen;
+		    char sign = '\0';
 
 		    if (isnan(fval)) {
 			expr = "NaN";
@@ -1137,33 +1145,28 @@ rb_str_format(int argc, const VALUE *argv, VALUE fmt)
 			expr = "Inf";
 		    }
 		    need = (int)strlen(expr);
-		    if ((!isnan(fval) && fval < 0.0) || (flags & FPLUS))
-			need++;
+		    elen = need;
+		    i = 0;
+		    if (!isnan(fval) && fval < 0.0)
+			sign = '-';
+		    else if (flags & (FPLUS|FSPACE))
+			sign = (flags & FPLUS) ? '+' : ' ';
+		    if (sign)
+			++need;
 		    if ((flags & FWIDTH) && need < width)
 			need = width;
 
-		    CHECK(need + 1);
-		    snprintf(&buf[blen], need + 1, "%*s", need, "");
+		    FILL(' ', need);
 		    if (flags & FMINUS) {
-			if (!isnan(fval) && fval < 0.0)
-			    buf[blen++] = '-';
-			else if (flags & FPLUS)
-			    buf[blen++] = '+';
-			else if (flags & FSPACE)
-			    blen++;
-			memcpy(&buf[blen], expr, strlen(expr));
+			if (sign)
+			    buf[blen - need--] = sign;
+			memcpy(&buf[blen - need], expr, elen);
 		    }
 		    else {
-			if (!isnan(fval) && fval < 0.0)
-			    buf[blen + need - strlen(expr) - 1] = '-';
-			else if (flags & FPLUS)
-			    buf[blen + need - strlen(expr) - 1] = '+';
-			else if ((flags & FSPACE) && need > width)
-			    blen++;
-			memcpy(&buf[blen + need - strlen(expr)], expr,
-			       strlen(expr));
+			if (sign)
+			    buf[blen - elen - 1] = sign;
+			memcpy(&buf[blen - elen], expr, elen);
 		    }
-		    blen += strlen(&buf[blen]);
 		    break;
 		}
 

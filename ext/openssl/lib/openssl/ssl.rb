@@ -1,87 +1,117 @@
+# frozen_string_literal: false
 =begin
-= $RCSfile$ -- Ruby-space definitions that completes C-space funcs for SSL
-
 = Info
   'OpenSSL for Ruby 2' project
   Copyright (C) 2001 GOTOU YUUZOU <gotoyuzo@notwork.org>
   All rights reserved.
 
 = Licence
-  This program is licenced under the same licence as Ruby.
+  This program is licensed under the same licence as Ruby.
   (See the file 'LICENCE'.)
-
-= Version
-  $Id$
 =end
 
 require "openssl/buffering"
-require "fcntl"
+require "io/nonblock"
 
 module OpenSSL
   module SSL
     class SSLContext
-      DEFAULT_PARAMS = {
+      DEFAULT_PARAMS = { # :nodoc:
         :ssl_version => "SSLv23",
         :verify_mode => OpenSSL::SSL::VERIFY_PEER,
-        :ciphers => %w{
-          ECDHE-ECDSA-AES128-GCM-SHA256
-          ECDHE-RSA-AES128-GCM-SHA256
-          ECDHE-ECDSA-AES256-GCM-SHA384
-          ECDHE-RSA-AES256-GCM-SHA384
-          DHE-RSA-AES128-GCM-SHA256
-          DHE-DSS-AES128-GCM-SHA256
-          DHE-RSA-AES256-GCM-SHA384
-          DHE-DSS-AES256-GCM-SHA384
-          ECDHE-ECDSA-AES128-SHA256
-          ECDHE-RSA-AES128-SHA256
-          ECDHE-ECDSA-AES128-SHA
-          ECDHE-RSA-AES128-SHA
-          ECDHE-ECDSA-AES256-SHA384
-          ECDHE-RSA-AES256-SHA384
-          ECDHE-ECDSA-AES256-SHA
-          ECDHE-RSA-AES256-SHA
-          DHE-RSA-AES128-SHA256
-          DHE-RSA-AES256-SHA256
-          DHE-RSA-AES128-SHA
-          DHE-RSA-AES256-SHA
-          DHE-DSS-AES128-SHA256
-          DHE-DSS-AES256-SHA256
-          DHE-DSS-AES128-SHA
-          DHE-DSS-AES256-SHA
-          AES128-GCM-SHA256
-          AES256-GCM-SHA384
-          AES128-SHA256
-          AES256-SHA256
-          AES128-SHA
-          AES256-SHA
-          ECDHE-ECDSA-RC4-SHA
-          ECDHE-RSA-RC4-SHA
-          RC4-SHA
-        }.join(":"),
+        :verify_hostname => true,
         :options => -> {
           opts = OpenSSL::SSL::OP_ALL
-          opts &= ~OpenSSL::SSL::OP_DONT_INSERT_EMPTY_FRAGMENTS if defined?(OpenSSL::SSL::OP_DONT_INSERT_EMPTY_FRAGMENTS)
+          opts &= ~OpenSSL::SSL::OP_DONT_INSERT_EMPTY_FRAGMENTS
           opts |= OpenSSL::SSL::OP_NO_COMPRESSION if defined?(OpenSSL::SSL::OP_NO_COMPRESSION)
-          opts |= OpenSSL::SSL::OP_NO_SSLv2 if defined?(OpenSSL::SSL::OP_NO_SSLv2)
-          opts |= OpenSSL::SSL::OP_NO_SSLv3 if defined?(OpenSSL::SSL::OP_NO_SSLv3)
+          opts |= OpenSSL::SSL::OP_NO_SSLv2 | OpenSSL::SSL::OP_NO_SSLv3
           opts
         }.call
       }
 
-      DEFAULT_CERT_STORE = OpenSSL::X509::Store.new
+      if !(OpenSSL::OPENSSL_VERSION.start_with?("OpenSSL") &&
+           OpenSSL::OPENSSL_VERSION_NUMBER >= 0x10100000)
+        DEFAULT_PARAMS.merge!(
+          ciphers: %w{
+            ECDHE-ECDSA-AES128-GCM-SHA256
+            ECDHE-RSA-AES128-GCM-SHA256
+            ECDHE-ECDSA-AES256-GCM-SHA384
+            ECDHE-RSA-AES256-GCM-SHA384
+            DHE-RSA-AES128-GCM-SHA256
+            DHE-DSS-AES128-GCM-SHA256
+            DHE-RSA-AES256-GCM-SHA384
+            DHE-DSS-AES256-GCM-SHA384
+            ECDHE-ECDSA-AES128-SHA256
+            ECDHE-RSA-AES128-SHA256
+            ECDHE-ECDSA-AES128-SHA
+            ECDHE-RSA-AES128-SHA
+            ECDHE-ECDSA-AES256-SHA384
+            ECDHE-RSA-AES256-SHA384
+            ECDHE-ECDSA-AES256-SHA
+            ECDHE-RSA-AES256-SHA
+            DHE-RSA-AES128-SHA256
+            DHE-RSA-AES256-SHA256
+            DHE-RSA-AES128-SHA
+            DHE-RSA-AES256-SHA
+            DHE-DSS-AES128-SHA256
+            DHE-DSS-AES256-SHA256
+            DHE-DSS-AES128-SHA
+            DHE-DSS-AES256-SHA
+            AES128-GCM-SHA256
+            AES256-GCM-SHA384
+            AES128-SHA256
+            AES256-SHA256
+            AES128-SHA
+            AES256-SHA
+          }.join(":"),
+        )
+      end
+
+      DEFAULT_CERT_STORE = OpenSSL::X509::Store.new # :nodoc:
       DEFAULT_CERT_STORE.set_default_paths
-      if defined?(OpenSSL::X509::V_FLAG_CRL_CHECK_ALL)
-        DEFAULT_CERT_STORE.flags = OpenSSL::X509::V_FLAG_CRL_CHECK_ALL
+      DEFAULT_CERT_STORE.flags = OpenSSL::X509::V_FLAG_CRL_CHECK_ALL
+
+      # A callback invoked when DH parameters are required.
+      #
+      # The callback is invoked with the Session for the key exchange, an
+      # flag indicating the use of an export cipher and the keylength
+      # required.
+      #
+      # The callback must return an OpenSSL::PKey::DH instance of the correct
+      # key length.
+
+      attr_accessor :tmp_dh_callback
+
+      # A callback invoked at connect time to distinguish between multiple
+      # server names.
+      #
+      # The callback is invoked with an SSLSocket and a server name.  The
+      # callback must return an SSLContext for the server name or nil.
+      attr_accessor :servername_cb if ExtConfig::HAVE_TLSEXT_HOST_NAME
+
+      # call-seq:
+      #    SSLContext.new => ctx
+      #    SSLContext.new(:TLSv1) => ctx
+      #    SSLContext.new("SSLv23_client") => ctx
+      #
+      # You can get a list of valid methods with OpenSSL::SSL::SSLContext::METHODS
+      def initialize(version = nil)
+        self.options |= OpenSSL::SSL::OP_ALL
+        self.ssl_version = version if version
       end
 
       ##
-      # Sets the parameters for this SSL context to the values in +params+.
+      # call-seq:
+      #   ctx.set_params(params = {}) -> params
+      #
+      # Sets saner defaults optimized for the use with HTTP-like protocols.
+      #
+      # If a Hash +params+ is given, the parameters are overridden with it.
       # The keys in +params+ must be assignment methods on SSLContext.
       #
       # If the verify_mode is not VERIFY_NONE and ca_file, ca_path and
       # cert_store are not set then the system default certificate store is
       # used.
-
       def set_params(params={})
         params = DEFAULT_PARAMS.merge(params)
         params.each{|name, value| self.__send__("#{name}=", value) }
@@ -121,15 +151,6 @@ module OpenSSL
 
       def do_not_reverse_lookup=(flag)
         to_io.do_not_reverse_lookup = flag
-      end
-    end
-
-    module Nonblock
-      def initialize(*args)
-        flag = File::NONBLOCK
-        flag |= @io.fcntl(Fcntl::F_GETFL) if defined?(Fcntl::F_GETFL)
-        @io.fcntl(Fcntl::F_SETFL, flag)
-        super
       end
     end
 
@@ -220,10 +241,39 @@ module OpenSSL
     class SSLSocket
       include Buffering
       include SocketForwarder
-      include Nonblock
 
-      ##
-      # Perform hostname verification after an SSL connection is established
+      if ExtConfig::HAVE_TLSEXT_HOST_NAME
+        attr_reader :hostname
+      end
+
+      # The underlying IO object.
+      attr_reader :io
+      alias :to_io :io
+
+      # The SSLContext object used in this connection.
+      attr_reader :context
+
+      # Whether to close the underlying socket as well, when the SSL/TLS
+      # connection is shut down. This defaults to +false+.
+      attr_accessor :sync_close
+
+      # call-seq:
+      #    ssl.sysclose => nil
+      #
+      # Sends "close notify" to the peer and tries to shut down the SSL
+      # connection gracefully.
+      #
+      # If sync_close is set to +true+, the underlying IO is also closed.
+      def sysclose
+        return if closed?
+        stop
+        io.close if sync_close
+      end
+
+      # call-seq:
+      #   ssl.post_connection_check(hostname) -> true
+      #
+      # Perform hostname verification following RFC 6125.
       #
       # This method MUST be called after calling #connect to ensure that the
       # hostname of a remote peer has been verified.
@@ -231,7 +281,8 @@ module OpenSSL
         if peer_cert.nil?
           msg = "Peer verification enabled, but no certificate received."
           if using_anon_cipher?
-            msg += " Anonymous cipher suite #{cipher[0]} was negotiated. Anonymous suites must be disabled to use peer verification."
+            msg += " Anonymous cipher suite #{cipher[0]} was negotiated. " \
+                   "Anonymous suites must be disabled to use peer verification."
           end
           raise SSLError, msg
         end
@@ -242,6 +293,11 @@ module OpenSSL
         return true
       end
 
+      # call-seq:
+      #   ssl.session -> aSession
+      #
+      # Returns the SSLSession object currently used, or nil if the session is
+      # not established.
       def session
         SSL::Session.new(self)
       rescue SSL::Session::SessionError
@@ -254,6 +310,26 @@ module OpenSSL
         ctx = OpenSSL::SSL::SSLContext.new
         ctx.ciphers = "aNULL"
         ctx.ciphers.include?(cipher)
+      end
+
+      def client_cert_cb
+        @context.client_cert_cb
+      end
+
+      def tmp_dh_callback
+        @context.tmp_dh_callback || OpenSSL::PKey::DEFAULT_TMP_DH_CALLBACK
+      end
+
+      def tmp_ecdh_callback
+        @context.tmp_ecdh_callback
+      end
+
+      def session_new_cb
+        @context.session_new_cb
+      end
+
+      def session_get_cb
+        @context.session_get_cb
       end
     end
 

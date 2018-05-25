@@ -1,20 +1,21 @@
 /*
- * $Id$
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001 Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
  */
 /*
- * This program is licenced under the same licence as Ruby.
+ * This program is licensed under the same licence as Ruby.
  * (See the file 'LICENCE'.)
  */
 #include "ossl.h"
 
-#define WrapX509Name(klass, obj, name) do { \
+#define NewX509Name(klass) \
+    TypedData_Wrap_Struct((klass), &ossl_x509name_type, 0)
+#define SetX509Name(obj, name) do { \
     if (!(name)) { \
 	ossl_raise(rb_eRuntimeError, "Name wasn't initialized."); \
     } \
-    (obj) = TypedData_Wrap_Struct((klass), &ossl_x509name_type, (name)); \
+    RTYPEDDATA_DATA(obj) = (name); \
 } while (0)
 #define GetX509Name(obj, name) do { \
     TypedData_Get_Struct((obj), X509_NAME, &ossl_x509name_type, (name)); \
@@ -61,6 +62,7 @@ ossl_x509name_new(X509_NAME *name)
     X509_NAME *new;
     VALUE obj;
 
+    obj = NewX509Name(cX509Name);
     if (!name) {
 	new = X509_NAME_new();
     } else {
@@ -69,7 +71,7 @@ ossl_x509name_new(X509_NAME *name)
     if (!new) {
 	ossl_raise(eX509NameError, NULL);
     }
-    WrapX509Name(cX509Name, obj, new);
+    SetX509Name(obj, new);
 
     return obj;
 }
@@ -93,10 +95,11 @@ ossl_x509name_alloc(VALUE klass)
     X509_NAME *name;
     VALUE obj;
 
+    obj = NewX509Name(klass);
     if (!(name = X509_NAME_new())) {
 	ossl_raise(eX509NameError, NULL);
     }
-    WrapX509Name(klass, obj, name);
+    SetX509Name(obj, name);
 
     return obj;
 }
@@ -174,6 +177,25 @@ ossl_x509name_initialize(int argc, VALUE *argv, VALUE self)
 	    }
 	}
     }
+
+    return self;
+}
+
+static VALUE
+ossl_x509name_initialize_copy(VALUE self, VALUE other)
+{
+    X509_NAME *name, *name_other, *name_new;
+
+    rb_check_frozen(self);
+    GetX509Name(self, name);
+    SafeGetX509Name(other, name_other);
+
+    name_new = X509_NAME_dup(name_other);
+    if (!name_new)
+	ossl_raise(eX509NameError, "X509_NAME_dup");
+
+    SetX509Name(self, name_new);
+    X509_NAME_free(name);
 
     return self;
 }
@@ -279,6 +301,7 @@ ossl_x509name_to_a(VALUE self)
     char long_name[512];
     const char *short_name;
     VALUE ary, vname, ret;
+    ASN1_STRING *value;
 
     GetX509Name(self, name);
     entries = X509_NAME_entry_count(name);
@@ -291,7 +314,8 @@ ossl_x509name_to_a(VALUE self)
 	if (!(entry = X509_NAME_get_entry(name, i))) {
 	    ossl_raise(eX509NameError, NULL);
 	}
-	if (!i2t_ASN1_OBJECT(long_name, sizeof(long_name), entry->object)) {
+	if (!i2t_ASN1_OBJECT(long_name, sizeof(long_name),
+			     X509_NAME_ENTRY_get_object(entry))) {
 	    ossl_raise(eX509NameError, NULL);
 	}
 	nid = OBJ_ln2nid(long_name);
@@ -301,10 +325,8 @@ ossl_x509name_to_a(VALUE self)
 	    short_name = OBJ_nid2sn(nid);
 	    vname = rb_str_new2(short_name); /*do not free*/
 	}
-	ary = rb_ary_new3(3,
-			  vname,
-        		  rb_str_new((const char *)entry->value->data, entry->value->length),
-        		  INT2FIX(entry->value->type));
+	value = X509_NAME_ENTRY_get_data(entry);
+	ary = rb_ary_new3(3, vname, asn1str_to_str(value), INT2NUM(value->type));
 	rb_ary_push(ret, ary);
     }
     return ret;
@@ -350,12 +372,10 @@ ossl_x509name_cmp(VALUE self, VALUE other)
 static VALUE
 ossl_x509name_eql(VALUE self, VALUE other)
 {
-    int result;
+    if (!rb_obj_is_kind_of(other, cX509Name))
+	return Qfalse;
 
-    if(CLASS_OF(other) != cX509Name) return Qfalse;
-    result = ossl_x509name_cmp0(self, other);
-
-    return (result == 0) ? Qtrue : Qfalse;
+    return ossl_x509name_cmp0(self, other) == 0 ? Qtrue : Qfalse;
 }
 
 /*
@@ -444,6 +464,12 @@ Init_ossl_x509name(void)
 {
     VALUE utf8str, ptrstr, ia5str, hash;
 
+#if 0
+    mOSSL = rb_define_module("OpenSSL");
+    eOSSLError = rb_define_class_under(mOSSL, "OpenSSLError", rb_eStandardError);
+    mX509 = rb_define_module_under(mOSSL, "X509");
+#endif
+
     id_aref = rb_intern("[]");
     eX509NameError = rb_define_class_under(mX509, "NameError", eOSSLError);
     cX509Name = rb_define_class_under(mX509, "Name", rb_cObject);
@@ -452,6 +478,7 @@ Init_ossl_x509name(void)
 
     rb_define_alloc_func(cX509Name, ossl_x509name_alloc);
     rb_define_method(cX509Name, "initialize", ossl_x509name_initialize, -1);
+    rb_define_copy_func(cX509Name, ossl_x509name_initialize_copy);
     rb_define_method(cX509Name, "add_entry", ossl_x509name_add_entry, -1);
     rb_define_method(cX509Name, "to_s", ossl_x509name_to_s, -1);
     rb_define_method(cX509Name, "to_a", ossl_x509name_to_a, 0);
@@ -468,8 +495,7 @@ Init_ossl_x509name(void)
     ptrstr = INT2NUM(V_ASN1_PRINTABLESTRING);
     ia5str = INT2NUM(V_ASN1_IA5STRING);
 
-    /* Document-const: DEFAULT_OBJECT_TYPE
-     *
+    /*
      * The default object type for name entries.
      */
     rb_define_const(cX509Name, "DEFAULT_OBJECT_TYPE", utf8str);
@@ -483,14 +509,12 @@ Init_ossl_x509name(void)
     rb_hash_aset(hash, rb_str_new2("domainComponent"), ia5str);
     rb_hash_aset(hash, rb_str_new2("emailAddress"), ia5str);
 
-    /* Document-const: OBJECT_TYPE_TEMPLATE
-     *
+    /*
      * The default object type template for name entries.
      */
     rb_define_const(cX509Name, "OBJECT_TYPE_TEMPLATE", hash);
 
-    /* Document-const: COMPAT
-     *
+    /*
      * A flag for #to_s.
      *
      * Breaks the name returned into multiple lines if longer than 80
@@ -498,24 +522,21 @@ Init_ossl_x509name(void)
      */
     rb_define_const(cX509Name, "COMPAT", ULONG2NUM(XN_FLAG_COMPAT));
 
-    /* Document-const: RFC2253
-     *
+    /*
      * A flag for #to_s.
      *
      * Returns an RFC2253 format name.
      */
     rb_define_const(cX509Name, "RFC2253", ULONG2NUM(XN_FLAG_RFC2253));
 
-    /* Document-const: ONELINE
-     *
+    /*
      * A flag for #to_s.
      *
      * Returns a more readable format than RFC2253.
      */
     rb_define_const(cX509Name, "ONELINE", ULONG2NUM(XN_FLAG_ONELINE));
 
-    /* Document-const: MULTILINE
-     *
+    /*
      * A flag for #to_s.
      *
      * Returns a multiline format.

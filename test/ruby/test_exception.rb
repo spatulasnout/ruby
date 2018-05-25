@@ -696,6 +696,52 @@ end.join
     assert_equal('d', e.cause.message, 'cause option should be honored always')
   end
 
+  def test_cause_thread_no_cause
+    bug12741 = '[ruby-core:77222] [Bug #12741]'
+
+    x = Thread.current
+    a = false
+    y = Thread.start do
+      Thread.pass until a
+      x.raise "stop"
+    end
+
+    begin
+      raise bug12741
+    rescue
+      e = assert_raise_with_message(RuntimeError, "stop") do
+        a = true
+        sleep 1
+      end
+    end
+    assert_nil(e.cause)
+  end
+
+  def test_cause_thread_with_cause
+    bug12741 = '[ruby-core:77222] [Bug #12741]'
+
+    x = Thread.current
+    a = false
+    y = Thread.start do
+      Thread.pass until a
+      begin
+        raise "caller's cause"
+      rescue
+        x.raise "stop"
+      end
+    end
+
+    begin
+      raise bug12741
+    rescue
+      e = assert_raise_with_message(RuntimeError, "stop") do
+        a = true
+        sleep 1
+      end
+    end
+    assert_equal("caller's cause", e.cause.message)
+  end
+
   def test_unknown_option
     bug = '[ruby-core:63203] [Feature #8257] should pass unknown options'
 
@@ -768,5 +814,52 @@ $stderr = $stdout; raise "\x82\xa0"') do |outs, errs, status|
     a = Class.new {def method_missing(*) super end}.new
     assert_raise(NameError) {a.instance_eval("foo")}
     assert_raise(NoMethodError, bug10969) {a.public_send("bar", true)}
+  end
+
+  def test_undefined_backtrace
+    assert_separately([], "#{<<-"begin;"}\n#{<<-"end;"}")
+    begin;
+      class Exception
+        undef backtrace
+      end
+
+      assert_raise(RuntimeError) {
+        raise RuntimeError, "hello"
+      }
+    end;
+  end
+
+  def test_redefined_backtrace
+    assert_separately([], "#{<<-"begin;"}\n#{<<-"end;"}")
+    begin;
+      $exc = nil
+
+      class Exception
+        undef backtrace
+        def backtrace
+          $exc = self
+        end
+      end
+
+      e = assert_raise(RuntimeError) {
+        raise RuntimeError, "hello"
+      }
+      assert_same(e, $exc)
+    end;
+  end
+
+  def test_wrong_backtrace
+    assert_separately([], "#{<<-"begin;"}\n#{<<-"end;"}")
+    begin;
+      class Exception
+        undef backtrace
+        def backtrace(a)
+        end
+      end
+
+      assert_raise(RuntimeError) {
+        raise RuntimeError, "hello"
+      }
+    end;
   end
 end

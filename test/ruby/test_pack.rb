@@ -480,6 +480,9 @@ class TestPack < Test::Unit::TestCase
     assert_equal([1, 2], "\x01\x00\x00\x02".unpack("C@3C"))
     assert_equal([nil], "\x00".unpack("@1C")) # is it OK?
     assert_raise(ArgumentError) { "\x00".unpack("@2C") }
+
+    pos = (1 << [nil].pack("p").bytesize * 8) - 100 # -100
+    assert_raise(RangeError) {"0123456789".unpack("@#{pos}C10")}
   end
 
   def test_pack_unpack_percent
@@ -726,5 +729,12 @@ EXPECTED
         [].pack("\u{3042}")
       }
     }
+  end
+
+  def test_unpack_with_block
+    ret = []; "ABCD".unpack("CCCC") {|v| ret << v }
+    assert_equal [65, 66, 67, 68], ret
+    ret = []; "A".unpack("B*") {|v| ret << v }
+    assert_equal ["01000001"], ret
   end
 end

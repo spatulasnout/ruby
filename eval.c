@@ -519,13 +519,25 @@ setup_exception(rb_thread_t *th, int tag, volatile VALUE mesg, VALUE cause)
 		rb_ivar_set(mesg, idBt_locations, at);
 	    }
 	}
-	else if (NIL_P(get_backtrace(mesg))) {
-	    at = rb_vm_backtrace_object();
-	    if (OBJ_FROZEN(mesg)) {
-		mesg = rb_obj_dup(mesg);
+	else {
+	    int status;
+
+	    TH_PUSH_TAG(th);
+	    if ((status = EXEC_TAG()) == 0) {
+		VALUE bt;
+		if (rb_threadptr_set_raised(th)) goto fatal;
+		bt = rb_get_backtrace(mesg);
+		if (NIL_P(bt)) {
+		    at = rb_vm_backtrace_object();
+		    if (OBJ_FROZEN(mesg)) {
+			mesg = rb_obj_dup(mesg);
+		    }
+		    rb_ivar_set(mesg, idBt_locations, at);
+		    set_backtrace(mesg, at);
+		}
+		rb_threadptr_reset_raised(th);
 	    }
-	    rb_ivar_set(mesg, idBt_locations, at);
-	    set_backtrace(mesg, at);
+	    TH_POP_TAG();
 	}
     }
 
@@ -567,6 +579,7 @@ setup_exception(rb_thread_t *th, int tag, volatile VALUE mesg, VALUE cause)
     }
 
     if (rb_threadptr_set_raised(th)) {
+      fatal:
 	th->errinfo = exception_error;
 	rb_threadptr_reset_raised(th);
 	JUMP_TAG(TAG_FATAL);
@@ -579,6 +592,17 @@ setup_exception(rb_thread_t *th, int tag, volatile VALUE mesg, VALUE cause)
 			      rb_sourceline());
 	}
 	EXEC_EVENT_HOOK(th, RUBY_EVENT_RAISE, th->cfp->self, 0, 0, mesg);
+    }
+}
+
+void
+rb_threadptr_setup_exception(rb_thread_t *th, VALUE mesg, VALUE cause)
+{
+    if (cause == Qundef) {
+	cause = get_thread_errinfo(th);
+    }
+    if (cause != mesg) {
+	rb_ivar_set(mesg, id_cause, cause);
     }
 }
 
@@ -801,7 +825,7 @@ rb_rescue2(VALUE (* b_proc) (ANYARGS), VALUE data1,
 {
     int state;
     rb_thread_t *th = GET_THREAD();
-    rb_control_frame_t *cfp = th->cfp;
+    rb_control_frame_t *volatile cfp = th->cfp;
     volatile VALUE result = Qfalse;
     volatile VALUE e_info = th->errinfo;
     va_list args;
@@ -867,7 +891,7 @@ rb_protect(VALUE (* proc) (VALUE), VALUE data, int * state)
     volatile VALUE result = Qnil;
     volatile int status;
     rb_thread_t *th = GET_THREAD();
-    rb_control_frame_t *cfp = th->cfp;
+    rb_control_frame_t *volatile cfp = th->cfp;
     struct rb_vm_protect_tag protect_tag;
     rb_jmpbuf_t org_jmpbuf;
 
@@ -1587,7 +1611,7 @@ errat_getter(ID id)
 {
     VALUE err = get_errinfo();
     if (!NIL_P(err)) {
-	return get_backtrace(err);
+	return rb_get_backtrace(err);
     }
     else {
 	return Qnil;
