@@ -15,6 +15,7 @@ if !with_config("bundled-rmd160") &&
      have_library("crypto")) &&
     OpenSSL.check_func("RIPEMD160_Transform", "openssl/ripemd.h")
   $objs << "rmd160ossl.#{$OBJEXT}"
+  $defs << "-DHAVE_OPENSSL_RIPEMD_H"
 else
   $objs << "rmd160.#{$OBJEXT}"
 end

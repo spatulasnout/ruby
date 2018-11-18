@@ -15,6 +15,7 @@ if !with_config("bundled-md5") &&
      have_library("crypto")) &&
     OpenSSL.check_func("MD5_Transform", "openssl/md5.h")
   $objs << "md5ossl.#{$OBJEXT}"
+  $defs << "-DHAVE_OPENSSL_MD5_H"
 else
   $objs << "md5.#{$OBJEXT}"
 end

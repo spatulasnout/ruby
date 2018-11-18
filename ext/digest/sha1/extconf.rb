@@ -15,6 +15,7 @@ if !with_config("bundled-sha1") &&
      have_library("crypto")) &&
     OpenSSL.check_func("SHA1_Transform", "openssl/sha.h")
   $objs << "sha1ossl.#{$OBJEXT}"
+  $defs << "-DHAVE_OPENSSL_SHA_H"
 else
   $objs << "sha1.#{$OBJEXT}"
 end
