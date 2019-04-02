@@ -738,7 +738,7 @@ extern char *rb_w32_strerror(int);
 #define getcwd(b, s)		rb_w32_getcwd(b, s)
 
 #undef getenv
-#define getenv(n)		rb_w32_getenv(n)
+#define getenv(n)		rb_w32_ugetenv(n)
 
 #undef rename
 #define rename(o, n)		rb_w32_rename(o, n)

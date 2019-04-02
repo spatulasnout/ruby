@@ -2628,18 +2628,7 @@ static char **my_environ;
 #undef environ
 #define environ my_environ
 #undef getenv
-static inline char *
-w32_getenv(const char *name)
-{
-    static int binary = -1;
-    static int locale = -1;
-    if (binary < 0) {
-	binary = rb_ascii8bit_encindex();
-	locale = rb_locale_encindex();
-    }
-    return locale == binary ? rb_w32_getenv(name) : rb_w32_ugetenv(name);
-}
-#define getenv(n) w32_getenv(n)
+#define getenv(n) rb_w32_ugetenv(n)
 #elif defined(__APPLE__)
 #undef environ
 #define environ (*_NSGetEnviron())
@@ -2658,20 +2647,11 @@ extern char **environ;
 #define ENVNMATCH(s1, s2, n) (memcmp((s1), (s2), (n)) == 0)
 #endif
 
-#ifdef _WIN32
-static VALUE
-env_str_transcode(VALUE str, rb_encoding *enc)
-{
-    return rb_str_conv_enc_opts(str, rb_utf8_encoding(), enc,
-				ECONV_INVALID_REPLACE | ECONV_UNDEF_REPLACE, Qnil);
-}
-#endif
-
 static VALUE
 env_str_new(const char *ptr, long len)
 {
 #ifdef _WIN32
-    VALUE str = env_str_transcode(rb_str_new(ptr, len), rb_locale_encoding());
+    VALUE str = rb_utf8_str_new(ptr, len);
 #else
     VALUE str = rb_locale_str_new(ptr, len);
 #endif
@@ -2684,7 +2664,7 @@ static VALUE
 env_path_str_new(const char *ptr)
 {
 #ifdef _WIN32
-    VALUE str = env_str_transcode(rb_str_new_cstr(ptr), rb_filesystem_encoding());
+    VALUE str = rb_utf8_str_new_cstr(ptr);
 #else
     VALUE str = rb_filesystem_str_new_cstr(ptr);
 #endif
