@@ -2887,40 +2887,49 @@ check_envname(const char *name)
 }
 #endif
 
+#if defined(_WIN32)
+static void
+rb_w32_usetenv(const char *name, const char *value)
+{
+    WCHAR *wname = NULL;
+    WCHAR *wval = NULL;
+    long wname_len = 0;
+    long wval_len = 0;
+    BOOL success = 0;
+
+    check_envname(name);
+
+    wname = rb_w32_mbstr_to_wstr(CP_UTF8, name, -1, &wname_len);
+    if (wname) {
+        if (!value || !(*value)) {
+	    success = SetEnvironmentVariableW(wname, NULL);
+	}
+	else {
+	    wval = rb_w32_mbstr_to_wstr(CP_UTF8, value, -1, &wval_len);
+	    if (wval) {
+		success = SetEnvironmentVariableW(wname, wval);
+		if (!success) {
+		    /* attempt to clean up by clearing any existing */
+		    (void) SetEnvironmentVariableW(wname, NULL);
+		}
+	    }
+	}
+    }
+
+    if (wval)
+	free(wval);
+    if (wname)
+	free(wname);
+    if (!success)
+	invalid_envname(name);  /* seems to suffice as a generic failure response */
+}
+#endif /* _WIN32 */
+
 void
 ruby_setenv(const char *name, const char *value)
 {
 #if defined(_WIN32)
-    VALUE buf;
-    int failed = 0;
-    check_envname(name);
-    if (value) {
-	char* p = GetEnvironmentStringsA();
-	size_t n;
-	if (!p) goto fail; /* never happen */
-	n = strlen(name) + 2 + strlen(value) + getenvsize(p);
-	FreeEnvironmentStringsA(p);
-	if (n >= getenvblocksize()) {
-	    goto fail;  /* 2 for '=' & '\0' */
-	}
-	buf = rb_sprintf("%s=%s", name, value);
-    }
-    else {
-	buf = rb_sprintf("%s=", name);
-    }
-    failed = putenv(RSTRING_PTR(buf));
-    /* even if putenv() failed, clean up and try to delete the
-     * variable from the system area. */
-    rb_str_resize(buf, 0);
-    if (!value || !*value) {
-	/* putenv() doesn't handle empty value */
-	if (!SetEnvironmentVariable(name, value) &&
-	    GetLastError() != ERROR_ENVVAR_NOT_FOUND) goto fail;
-    }
-    if (failed) {
-      fail:
-	invalid_envname(name);
-    }
+    rb_w32_usetenv(name, value);
 #elif defined(HAVE_SETENV) && defined(HAVE_UNSETENV)
 #undef setenv
 #undef unsetenv
