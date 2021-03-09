@@ -4804,13 +4804,19 @@ int rb_w32_rename(const char *from, const char *to)
     return ret;
 }
 
+static int
+has_extended_path_prefix(const WCHAR *p)
+{
+    return p[0] == L'\\' && p[1] == L'\\' && p[2] == L'?' && p[3] == L'\\';
+}
+
 /* License: Ruby's */
 static int
 isUNCRoot(const WCHAR *path)
 {
     if (path[0] == L'\\' && path[1] == L'\\') {
     	const WCHAR *p = path + 2;
-    	if (p[0] == L'?' && p[1] == L'\\') {	/* Special '\\?\' extended path syntax found.  If this is a server share, then it must be followed by 'UNC\' */
+    	if (has_extended_path_prefix(path)) {	/* Special '\\?\' extended path syntax found.  If this is a server share, then it must be followed by 'UNC\' */
 	    p += 2;
 	    if (p[0] == L'U' && p[1] == L'N' && p[2] == L'C' && p[3] == L'\\') { /* 'UNC\' */
 	    	p += 4;
@@ -5110,8 +5116,12 @@ wstati64(const WCHAR *path, struct stati64 *st)
 	else if (*end != L'\\')
 	    lstrcatW(buf1, L"\\");
     }
-    else if (*end == L'\\' || (buf1 + 1 == end && *end == L':'))
-	lstrcatW(buf1, L".");
+    else {
+	if (! has_extended_path_prefix(buf1)) {
+	    if (*end == L'\\' || (buf1 + 1 == end && *end == L':'))
+		lstrcatW(buf1, L".");
+	}
+    }
 
     ret = winnt_stat(buf1, st);
     if (ret == 0) {
