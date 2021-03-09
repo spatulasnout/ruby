@@ -4808,31 +4808,31 @@ int rb_w32_rename(const char *from, const char *to)
 static int
 isUNCRoot(const WCHAR *path)
 {
-	if (path[0] == L'\\' && path[1] == L'\\') {
-		const WCHAR *p = path + 2;
-		if (p[0] == L'?' && p[1] == L'\\') {	/* Special '\\?\' extended path syntax found.  If this is a server share, then it must be followed by 'UNC\' */
-			p += 2;
-			if (p[0] == L'U' && p[1] == L'N' && p[2] == L'C' && p[3] == L'\\') { /* 'UNC\' */
-				p += 4;
-			}
-			else {
-				return 0;	/* must be an extended path to a drive-letter or malformed */
-			}
-		}
-		for (; *p; p++) {	/* skip over server name */
-			if (*p == L'\\')
-				break;
-		}
-		if (p[0] && p[1]) {
-			for (p++; *p; p++) {	/* skip over share name */
-				if (*p == L'\\')
-					break;
-			}
-			if (!p[0] || !p[1] || (p[1] == L'.' && !p[2]))
-				return 1;
-		}
-	}
-	return 0;
+    if (path[0] == L'\\' && path[1] == L'\\') {
+    	const WCHAR *p = path + 2;
+    	if (p[0] == L'?' && p[1] == L'\\') {	/* Special '\\?\' extended path syntax found.  If this is a server share, then it must be followed by 'UNC\' */
+	    p += 2;
+	    if (p[0] == L'U' && p[1] == L'N' && p[2] == L'C' && p[3] == L'\\') { /* 'UNC\' */
+	    	p += 4;
+	    }
+	    else {
+	    	return 0;	/* must be an extended path to a drive-letter or malformed */
+	    }
+    	}
+    	for (; *p; p++) {	/* skip over server name */
+    	    if (*p == L'\\')
+    		break;
+    	}
+    	if (p[0] && p[1]) {
+    	    for (p++; *p; p++) {	/* skip over share name */
+    	    	if (*p == L'\\')
+    	    		break;
+    	    }
+    	    if (!p[0] || !p[1] || (p[1] == L'.' && !p[2]))
+    	    	return 1;
+    	}
+    }
+    return 0;
 }
 
 #define COPY_STAT(src, dest, size_cast) do {	\
